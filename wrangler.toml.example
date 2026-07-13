@@ -1,0 +1,35 @@
+name = "steady"
+main = "worker/index.js"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+# --- D1 database ---
+# Create with: wrangler d1 create steady
+# Then paste the returned database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "steady"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# --- Daily cron: pushes due topics to Todoist ---
+# Pick a UTC time that lands in your own morning — e.g. 23:30 UTC is
+# 5:00 AM IST.
+[triggers]
+crons = ["30 23 * * *"]
+
+# --- Static frontend, served by the same Worker ---
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# --- Non-secret config ---
+# Default destination project; individual topics can override this with
+# their own todoist_project_id (see the picker in the frontend).
+[vars]
+TODOIST_PROJECT_ID = "REPLACE_WITH_TODOIST_PROJECT_ID"
+REVISION_LABEL = "revision"
+
+# --- Secrets (do NOT put these in this file) ---
+# wrangler secret put TODOIST_API_TOKEN
+# wrangler secret put BASIC_AUTH_USER      # optional — gates the whole app
+# wrangler secret put BASIC_AUTH_PASS

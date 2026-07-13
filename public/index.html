@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Steady</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #111110;
+    --panel: #171716;
+    --border: #2a2a28;
+    --text: #ece9e4;
+    --text-dim: #9a968f;
+    --accent: #7eb89a;
+    --accent-dim: #4f7d68;
+    --danger: #c97b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 {
+    font-family: 'DM Serif Display', serif;
+    font-weight: 400;
+    font-size: 40px;
+    margin: 0 0 4px;
+    color: var(--text);
+  }
+  .tagline { color: var(--text-dim); margin: 0 0 32px; font-size: 14px; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+
+  /* Pulse histogram: 28 days of review activity */
+  .pulse { display: flex; align-items: flex-end; gap: 3px; height: 60px; }
+  .pulse-bar {
+    flex: 1;
+    background: var(--accent-dim);
+    border-radius: 2px 2px 0 0;
+    min-height: 3px;
+    transition: background 0.15s;
+  }
+  .pulse-bar.active { background: var(--accent); }
+  .pulse-label { color: var(--text-dim); font-size: 11px; margin-top: 8px; display: flex; justify-content: space-between; }
+
+  form.add-topic { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type="text"] {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--accent-dim); }
+  select.project-picker {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    max-width: 160px;
+  }
+  select.project-picker:focus { outline: none; border-color: var(--accent-dim); }
+  button {
+    background: var(--accent);
+    color: #0d1410;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #8fc6ab; }
+  button.ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  button.ghost:hover { border-color: var(--accent-dim); color: var(--text); }
+
+  .topic {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .topic:last-child { border-bottom: none; }
+  .topic-title { font-size: 15px; }
+  .topic-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .topic-due { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: rgba(126,184,154,0.15); color: var(--accent); }
+  .topic-due.overdue { background: rgba(201,123,107,0.15); color: var(--danger); }
+  .topic-right { display: flex; align-items: center; gap: 10px; }
+  .pushed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+  .archive-btn {
+    background: transparent; border: none; color: var(--text-dim);
+    font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1;
+  }
+  .archive-btn:hover { color: var(--danger); }
+
+  .quality-row { display: none; gap: 6px; margin-top: 10px; }
+  .quality-row.open { display: flex; }
+  .qbtn {
+    width: 30px; height: 30px; border-radius: 6px; font-size: 12px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text-dim);
+  }
+  .qbtn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .empty { color: var(--text-dim); font-size: 14px; padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Steady</h1>
+  <p class="tagline">Log what you studied. Steady tells you when to look at it again.</p>
+
+  <div class="panel">
+    <div class="pulse" id="pulse"></div>
+    <div class="pulse-label"><span>28 days ago</span><span>today</span></div>
+  </div>
+
+  <div class="panel">
+    <form class="add-topic" id="addForm">
+      <input type="text" id="titleInput" placeholder="What did you study today?" required />
+      <select class="project-picker" id="projectPicker" style="display:none"></select>
+      <button type="submit">Add</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div id="topicList"></div>
+  </div>
+</div>
+
+<script>
+  // Same-origin API served by the Worker. Falls back to localStorage if
+  // the API isn't reachable (e.g. opening this file directly, no backend yet).
+  const API = '/api';
+  let useLocal = false;
+  let localTopics = JSON.parse(localStorage.getItem('steady_topics') || '[]');
+  let projectsById = {};
+
+  function saveLocal() {
+    localStorage.setItem('steady_topics', JSON.stringify(localTopics));
+  }
+
+  function todayISO() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function sm2(prev, quality) {
+    let { ef, interval_days, repetitions } = prev;
+    if (quality < 3) {
+      repetitions = 0;
+      interval_days = 1;
+    } else {
+      repetitions += 1;
+      if (repetitions === 1) interval_days = 1;
+      else if (repetitions === 2) interval_days = 6;
+      else interval_days = Math.round(interval_days * ef);
+    }
+    ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+    if (ef < 1.3) ef = 1.3;
+    const next = new Date();
+    next.setUTCDate(next.getUTCDate() + interval_days);
+    return { ef, interval_days, repetitions, next_due: next.toISOString().slice(0, 10) };
+  }
+
+  async function apiFetch(path, opts) {
+    try {
+      const res = await fetch(API + path, opts);
+      if (!res.ok) throw new Error('api error');
+      return await res.json();
+    } catch (e) {
+      useLocal = true;
+      throw e;
+    }
+  }
+
+  async function loadTopics() {
+    if (!useLocal) {
+      try { return await apiFetch('/topics'); } catch (e) { /* fall through */ }
+    }
+    return localTopics
+      .filter((t) => !t.archived)
+      .sort((a, b) => a.next_due.localeCompare(b.next_due));
+  }
+
+  async function loadStats() {
+    if (!useLocal) {
+      try { return await apiFetch('/stats'); } catch (e) { /* fall through */ }
+    }
+    const days = [];
+    const reviewDates = localTopics.flatMap((t) => t.reviewLog || []);
+    for (let i = 27; i >= 0; i--) {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      days.push({ day: key, count: reviewDates.filter((r) => r === key).length });
+    }
+    return days;
+  }
+
+  // Best-effort only: a missing/unconfigured Todoist token shouldn't flip
+  // the whole app into localStorage mode, so this doesn't touch `useLocal`.
+  async function loadTodoistProjects() {
+    try {
+      const res = await fetch(API + '/todoist/projects');
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function addTopic(title, todoistProjectId) {
+    if (!useLocal) {
+      try { return await apiFetch('/topics', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, todoist_project_id: todoistProjectId || undefined }),
+      }); } catch (e) { /* fall through */ }
+    }
+    const topic = {
+      id: Date.now(), title, ef: 2.5, interval_days: 0, repetitions: 0,
+      next_due: todayISO(), archived: 0, reviewLog: [],
+    };
+    localTopics.push(topic);
+    saveLocal();
+    return topic;
+  }
+
+  async function archiveTopic(id) {
+    if (!useLocal) {
+      try { return await apiFetch(`/topics/${id}`, { method: 'DELETE' }); } catch (e) { /* fall through */ }
+    }
+    const topic = localTopics.find((t) => t.id === id);
+    if (topic) { topic.archived = 1; saveLocal(); }
+  }
+
+  async function reviewTopic(id, quality) {
+    if (!useLocal) {
+      try { return await apiFetch(`/topics/${id}/review`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quality }),
+      }); } catch (e) { /* fall through */ }
+    }
+    const topic = localTopics.find((t) => t.id === id);
+    const after = sm2(topic, quality);
+    Object.assign(topic, after);
+    topic.reviewLog = topic.reviewLog || [];
+    topic.reviewLog.push(todayISO());
+    saveLocal();
+    return topic;
+  }
+
+  function renderPulse(days) {
+    const max = Math.max(1, ...days.map((d) => d.count));
+    const pulse = document.getElementById('pulse');
+    pulse.innerHTML = days
+      .map((d) => {
+        const h = Math.max(3, Math.round((d.count / max) * 60));
+        const active = d.count > 0 ? 'active' : '';
+        return `<div class="pulse-bar ${active}" style="height:${h}px" title="${d.day}: ${d.count} review${d.count === 1 ? '' : 's'}"></div>`;
+      })
+      .join('');
+  }
+
+  function renderTopics(topics) {
+    const list = document.getElementById('topicList');
+    if (!topics.length) {
+      list.innerHTML = '<div class="empty">No topics yet. Add something you studied today.</div>';
+      return;
+    }
+    const today = todayISO();
+    list.innerHTML = topics
+      .map((t) => {
+        const overdue = t.next_due < today ? 'overdue' : '';
+        const dueLabel = t.next_due === today ? 'due today' : t.next_due < today ? 'overdue' : `due ${t.next_due}`;
+        const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
+        const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
+        if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
+        return `
+          <div class="topic" data-id="${t.id}">
+            <div style="flex:1">
+              <div class="topic-title">${escapeHtml(t.title)}</div>
+              <div class="topic-meta">${metaBits.join(' · ')}</div>
+              <div class="quality-row" id="qrow-${t.id}">
+                ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
+              </div>
+            </div>
+            <div class="topic-right">
+              ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
+              <div class="topic-due ${overdue}" data-toggle="${t.id}" style="cursor:pointer">${dueLabel}</div>
+              <button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>
+            </div>
+          </div>`;
+      })
+      .join('');
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function refresh() {
+    const [topics, stats] = await Promise.all([loadTopics(), loadStats()]);
+    renderTopics(topics);
+    renderPulse(stats);
+  }
+
+  document.getElementById('addForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('titleInput');
+    const title = input.value.trim();
+    if (!title) return;
+    const picker = document.getElementById('projectPicker');
+    await addTopic(title, picker.style.display !== 'none' ? picker.value : undefined);
+    input.value = '';
+    refresh();
+  });
+
+  (async () => {
+    const projects = await loadTodoistProjects();
+    if (!projects || !projects.length) return;
+    projectsById = Object.fromEntries(projects.map((p) => [p.id, p.name]));
+    const picker = document.getElementById('projectPicker');
+    picker.innerHTML = projects
+      .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+      .join('');
+    const defaultIdx = projects.findIndex((p) => p.name === 'Steady');
+    if (defaultIdx >= 0) picker.selectedIndex = defaultIdx;
+    picker.style.display = '';
+    refresh(); // re-render so any already-loaded topics pick up project names
+  })();
+
+  document.getElementById('topicList').addEventListener('click', async (e) => {
+    const archiveId = e.target.dataset.archive;
+    if (archiveId) {
+      await archiveTopic(useLocal ? Number(archiveId) : archiveId);
+      refresh();
+      return;
+    }
+    const toggleId = e.target.dataset.toggle;
+    if (toggleId) {
+      document.getElementById(`qrow-${toggleId}`).classList.toggle('open');
+      return;
+    }
+    const q = e.target.dataset.q;
+    const id = e.target.dataset.id;
+    if (q !== undefined) {
+      await reviewTopic(useLocal ? Number(id) : id, Number(q));
+      refresh();
+    }
+  });
+
+  refresh();
+</script>
+</body>
+</html>
