@@ -39,25 +39,30 @@ Deployed and working: topic CRUD, SM-2 review scoring, archiving, stats,
 and the Todoist push have all been exercised against a real D1 instance and
 a real Todoist project (not just a first draft anymore).
 
-- `worker/index.js` — routes for topics (CRUD-ish) and reviews, SM-2 math, a
-  `scheduled()` handler that pushes due topics to Todoist (per-topic
-  `pushToTodoist` failures are caught individually so one bad topic doesn't
-  stop the rest of the daily batch), and a Basic Auth gate (`checkAuth`,
-  constant-time comparison via HMAC) in front of every route. The auth gate
-  is inert until `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` secrets are set.
+- `worker/index.js` — routes for topics (CRUD-ish) and reviews, SM-2+
+  scheduling math, a `GET /api/calendar?month=YYYY-MM` route (due topics
+  grouped by day, for the calendar view), a `scheduled()` handler that
+  pushes due topics to Todoist (per-topic `pushToTodoist` failures are
+  caught individually so one bad topic doesn't stop the rest of the daily
+  batch), and a Basic Auth gate (`checkAuth`, constant-time comparison via
+  HMAC) in front of every route. The auth gate is inert until
+  `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` secrets are set.
 - `schema.sql` — two tables, `topics` (includes `todoist_project_id` for
   per-topic destination overrides) and `reviews`.
 - `public/index.html` — single-file frontend (vanilla JS, no build step).
   Near-black background (`#111110`), sage green accent (`#7eb89a`),
   `DM Serif Display` for the wordmark, a 28-day "pulse" histogram of review
-  activity, a Todoist project picker in the add-topic form, an archive
-  button per topic, and a "pushed to Todoist" indicator dot. Works
-  standalone via `localStorage` if `/api/*` calls fail.
+  activity, a forward-looking calendar panel (gradient backdrop, tiered
+  color-pop fills by due-count, glowing "today" ring — deliberately more
+  vibrant than the rest of the app's flatter panels), a Todoist project
+  picker in the add-topic form, an archive button per topic, and a "pushed
+  to Todoist" indicator dot. Works standalone via `localStorage` if
+  `/api/*` calls fail.
 - `wrangler.toml` — cron is `30 23 * * *` (23:30 UTC), tuned for the user's
   timezone so revisions land in Todoist before their day starts, not at
   midday. Don't assume this offset is right if the user's timezone changes.
 
-## SM-2 as implemented
+## SM-2 as implemented (+ elapsed-time correction on 3rd+ reviews)
 
 Standard SM-2, 0–5 quality rating per review:
 
@@ -65,13 +70,56 @@ Standard SM-2, 0–5 quality rating per review:
   tomorrow), but EF still updates (per the original SM-2 spec, failures
   still adjust easiness).
 - `quality >= 3` → repetitions += 1. First rep → interval 1 day. Second rep
-  → interval 6 days. Third+ → `interval = round(interval * EF)`.
+  → interval 6 days.
 - `EF = EF + (0.1 - (5-q)*(0.08+(5-q)*0.02))`, floored at 1.3.
+
+**Third-plus successful review is not pure SM-2.** Plain SM-2 assumes every
+review happens exactly on schedule — reviewing early or late has zero
+effect, which was the whole reason this changed. FSRS was considered and
+rejected (it needs large, same-distribution review data to calibrate;
+Steady's low-volume, topic-level usage will never look like the
+flashcard-drilling corpus FSRS's defaults were fit on). SuperMemo SM-5 was
+also considered — its core mechanism is real and sourced, but the
+cross-item pooling matrix it needs (E-Factor bucket boundaries, a
+convergence `fraction`, matrix dimensions) was never published by Wozniak
+anywhere accessible (checked SM-5's own page, the cross-version algorithm
+overview, the OF-matrix-introduction blog post, SuperMemopedia, and an
+attempt at the original 1994 paper — genuine dead end, not a gap in
+searching).
+
+The resolution: SuperMemo **SM-4**'s per-observation formula is fully
+published on its own with no missing constants —
+`OI' = interval + interval*(1-1/EF)/2*(0.25*q-1)` (Wozniak,
+super-memory.com/english/ol/sm4.htm) — where `interval` is the *actual*
+elapsed days since the last review. What's unsourceable is only the
+cross-item matrix SM-5 layers on top to smooth that formula's output across
+many items; SM-4's own spec says that matrix's seed value is
+`OI(n,EF) = OI(n-1,EF)*EF`, which is exactly vanilla SM-2's own growth
+formula. So: apply SM-4's real formula directly against each topic's own
+prior state (no shared matrix, no bucket boundaries needed), blended with
+SM-2's own prediction via Wozniak's own published blending structure
+(`(1-fraction)*old + fraction*new`):
+
+```js
+const naive = interval_days * ef;                              // SM-2's own prediction / SM-4's matrix seed
+const oiPrime = elapsedDays + elapsedDays*(1-1/ef)/2*(0.25*quality-1); // SM-4's formula, verbatim
+const FRACTION = 0.3; // Wozniak leaves this in (0,1) with no published default — chosen
+                       // conservatively since a single review has no cross-item pooling to smooth it
+const blended = (1 - FRACTION) * naive + FRACTION * oiPrime;
+interval_days = Math.max(interval_days, Math.round(blended)); // success must never shrink the schedule
+```
+
+The `Math.max` floor is load-bearing, not decorative — without it, a
+same-day repeat review can blend to *below* the currently-scheduled
+interval even on success (verified by hand: prev interval 6, EF 1.3,
+elapsed 0 → blended ≈5.46, which would regress the schedule). Hand-verified
+reference (prev interval 6, EF 1.3, quality 3): on-time (elapsed=6) → 7
+days; early (elapsed=3) → 6 days; late (elapsed=12) → 9 days.
 
 This lives in both `worker/index.js` (server-side, source of truth) and
 duplicated in `public/index.html` (client-side, only used in the
-localStorage fallback mode). If you change the algorithm, change it in both
-places or note the drift.
+localStorage fallback mode). If you change the algorithm — or the
+`FRACTION` constant — change it in both places or note the drift.
 
 ## Deployment
 
