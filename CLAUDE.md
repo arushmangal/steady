@@ -50,17 +50,50 @@ a real Todoist project (not just a first draft anymore).
 - `schema.sql` — two tables, `topics` (includes `todoist_project_id` for
   per-topic destination overrides) and `reviews`.
 - `public/index.html` — single-file frontend (vanilla JS, no build step).
-  Near-black background (`#111110`), sage green accent (`#7eb89a`),
-  `DM Serif Display` for the wordmark, a 28-day "pulse" histogram of review
-  activity, a forward-looking calendar panel (gradient backdrop, tiered
-  color-pop fills by due-count, glowing "today" ring — deliberately more
-  vibrant than the rest of the app's flatter panels), a Todoist project
-  picker in the add-topic form, an archive button per topic, and a "pushed
-  to Todoist" indicator dot. Works standalone via `localStorage` if
-  `/api/*` calls fail.
+  Near-black background (`#111110`) with a subtle radial-gradient vignette,
+  sage green accent (`#7eb89a`), `DM Serif Display` for the wordmark
+  (gradient text treatment), a 28-day activity **heatmap** (color-intensity
+  tiles, GitHub-contribution-graph style — replaced the original bar-chart
+  "pulse"), a **clickable** forward-looking calendar panel (gradient
+  backdrop, tiered color-pop fills by due-count, glowing "today" ring;
+  clicking a due day opens an inline detail panel listing what's due, with
+  quality-rating buttons to review directly from the calendar for
+  today/overdue days), a Todoist project picker in the add-topic form, an
+  archive button and color-coded left-border accent per topic (by
+  overdue/due-today/upcoming status), and a "pushed to Todoist" indicator
+  dot. Every panel deliberately has real visual identity (gradients, glow,
+  hover motion) rather than the flat/muted look the app started with — this
+  was an explicit, repeated correction from the user, not a style nit.
+  Works standalone via `localStorage` if `/api/*` calls fail.
 - `wrangler.toml` — cron is `30 23 * * *` (23:30 UTC), tuned for the user's
   timezone so revisions land in Todoist before their day starts, not at
   midday. Don't assume this offset is right if the user's timezone changes.
+
+## Timezone handling — read this before touching any date logic
+
+This is a single-user app and that user is on **IST (UTC+5:30, no DST)**.
+Nothing in this app should ever compute "today" from raw UTC — between
+midnight and 5:30am IST, raw UTC is still on *yesterday's* date, which was
+a real, user-reported bug (the app didn't realize it was already a new day).
+The fix touches **two different layers**, both of which matter:
+
+- **JS**: use `nowIST()` (`new Date(Date.now() + 5.5*60*60*1000)`), never
+  bare `new Date()`, anywhere "today" or date arithmetic is computed. Both
+  `worker/index.js` and `public/index.html` have their own copy of this
+  helper (same dual-implementation pattern as the scheduling math).
+- **SQL**: SQLite's `date()`/`datetime()` functions have no timezone
+  concept — `date(reviewed_at)` extracts the *raw UTC* calendar date from a
+  stored timestamp. This bit us in `GET /api/stats`: reviews genuinely done
+  in the early hours of IST "tomorrow" were grouped under UTC "today"
+  instead, silently out of step with the IST-anchored day list right next
+  to it. Fix: `date(reviewed_at, '+330 minutes')` (330 minutes = 5.5 hours).
+  Any new SQL that buckets rows by calendar day needs this same adjustment
+  — it's easy to add a query later and forget, since the JS-side fix alone
+  looks complete.
+
+If the user's timezone ever changes, the offset constant needs updating in
+three places: the JS `IST_OFFSET_MS`/`nowIST()` in both files, any SQL
+`+330 minutes` literals, and the cron schedule in `wrangler.toml`.
 
 ## SM-2 as implemented (+ elapsed-time correction on 3rd+ reviews)
 
