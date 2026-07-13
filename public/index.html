@@ -20,7 +20,10 @@
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--bg);
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(126,184,154,0.08), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 10%, rgba(216,185,120,0.05), transparent 60%),
+      var(--bg);
     color: var(--text);
     font-family: 'Inter', system-ui, sans-serif;
     min-height: 100vh;
@@ -31,29 +34,41 @@
     font-weight: 400;
     font-size: 40px;
     margin: 0 0 4px;
-    color: var(--text);
+    display: inline-block;
+    background-image: linear-gradient(100deg, var(--text) 30%, var(--accent) 75%, #d8b978);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
   }
   .tagline { color: var(--text-dim); margin: 0 0 32px; font-size: 14px; }
 
   .panel {
-    background: var(--panel);
+    background: linear-gradient(160deg, #1b1b19 0%, var(--panel) 45%, #141413 100%);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 20px;
     margin-bottom: 20px;
   }
 
-  /* Pulse histogram: 28 days of review activity */
-  .pulse { display: flex; align-items: flex-end; gap: 3px; height: 60px; }
-  .pulse-bar {
-    flex: 1;
-    background: var(--accent-dim);
-    border-radius: 2px 2px 0 0;
-    min-height: 3px;
-    transition: background 0.15s;
+  /* Heatmap: 28 days of review activity, GitHub-style intensity grid */
+  .heatmap-panel { background: linear-gradient(135deg, #172a30 0%, #1a2035 55%, #111110 100%); border-color: #2d3a3f; }
+  .heatmap { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; }
+  .heat-cell {
+    aspect-ratio: 1;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    transition: transform 0.15s, box-shadow 0.15s;
   }
-  .pulse-bar.active { background: var(--accent); }
-  .pulse-label { color: var(--text-dim); font-size: 11px; margin-top: 8px; display: flex; justify-content: space-between; }
+  .heat-cell:hover { transform: scale(1.15); }
+  .heat-cell.heat-1 { background: linear-gradient(160deg, rgba(126,184,154,0.35), rgba(45,110,120,0.25)); border-color: transparent; }
+  .heat-cell.heat-2 { background: linear-gradient(160deg, rgba(126,184,154,0.65), rgba(45,110,120,0.5)); border-color: transparent; }
+  .heat-cell.heat-3 {
+    background: linear-gradient(160deg, #d8b978, #7eb89a);
+    border-color: transparent;
+    box-shadow: 0 0 10px rgba(216,185,120,0.4);
+  }
+  .heatmap-label { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; justify-content: space-between; }
 
   /* Calendar: forward-looking due dates */
   .panel.cal-panel {
@@ -125,8 +140,9 @@
     color: #1a0f0d; font-weight: 600; border-color: var(--danger);
     box-shadow: 0 0 14px rgba(201,123,107,0.4);
   }
-  .cal-day.has-due { cursor: default; }
+  .cal-day.has-due { cursor: pointer; }
   .cal-day.has-due:hover { transform: scale(1.07); box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
+  .cal-day.selected { outline: 2px solid var(--text); outline-offset: 1px; }
   .cal-badge {
     position: absolute; top: 3px; right: 3px; font-size: 9px; font-weight: 700;
     background: rgba(0,0,0,0.35); border-radius: 999px;
@@ -134,10 +150,24 @@
     display: flex; align-items: center; justify-content: center;
   }
 
+  /* Calendar day-detail: appears below the grid when a due day is clicked */
+  .cal-detail {
+    margin-top: 14px; padding-top: 14px;
+    border-top: 1px dashed rgba(255,255,255,0.12);
+  }
+  .cal-detail-title { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+  .cal-detail-topic {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0;
+  }
+  .cal-detail-topic + .cal-detail-topic { border-top: 1px solid rgba(255,255,255,0.06); }
+  .cal-detail-quality { display: flex; gap: 4px; }
+
+  .panel.add-panel { background: linear-gradient(160deg, #241c17 0%, var(--panel) 45%, #141413 100%); border-color: #3a2f24; }
   form.add-topic { display: flex; gap: 8px; flex-wrap: wrap; }
   input[type="text"] {
     flex: 1;
-    background: var(--bg);
+    background: rgba(0,0,0,0.25);
     border: 1px solid var(--border);
     color: var(--text);
     padding: 10px 12px;
@@ -146,7 +176,7 @@
   }
   input[type="text"]:focus { outline: none; border-color: var(--accent-dim); }
   select.project-picker {
-    background: var(--bg);
+    background: rgba(0,0,0,0.25);
     border: 1px solid var(--border);
     color: var(--text-dim);
     padding: 10px 12px;
@@ -156,7 +186,7 @@
   }
   select.project-picker:focus { outline: none; border-color: var(--accent-dim); }
   button {
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), #4f9d8f);
     color: #0d1410;
     border: none;
     padding: 10px 18px;
@@ -164,22 +194,31 @@
     font-weight: 600;
     font-size: 14px;
     cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
   }
-  button:hover { background: #8fc6ab; }
+  button:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(126,184,154,0.3); }
   button.ghost {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text-dim);
+    box-shadow: none;
   }
-  button.ghost:hover { border-color: var(--accent-dim); color: var(--text); }
+  button.ghost:hover { border-color: var(--accent-dim); color: var(--text); transform: none; box-shadow: none; filter: none; }
 
   .topic {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 0;
+    padding: 14px 12px 14px 14px;
     border-bottom: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 2px;
+    transition: background 0.15s, border-color 0.15s;
   }
+  .topic:hover { background: rgba(255,255,255,0.02); }
+  .topic.status-overdue { border-left-color: var(--danger); }
+  .topic.status-today { border-left-color: var(--accent); }
   .topic:last-child { border-bottom: none; }
   .topic-title { font-size: 15px; }
   .topic-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
@@ -196,10 +235,16 @@
   .quality-row { display: none; gap: 6px; margin-top: 10px; }
   .quality-row.open { display: flex; }
   .qbtn {
-    width: 30px; height: 30px; border-radius: 6px; font-size: 12px;
-    background: var(--bg); border: 1px solid var(--border); color: var(--text-dim);
+    width: 30px; height: 30px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    border: 1px solid transparent; color: var(--text);
+    transition: transform 0.15s, filter 0.15s;
   }
-  .qbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .qbtn:hover { transform: translateY(-2px); filter: brightness(1.15); }
+  .qbtn[data-q="0"], .qbtn[data-q="1"] { background: linear-gradient(160deg, rgba(201,123,107,0.5), rgba(160,80,60,0.35)); }
+  .qbtn[data-q="2"] { background: linear-gradient(160deg, rgba(216,166,120,0.5), rgba(170,110,50,0.35)); }
+  .qbtn[data-q="3"] { background: linear-gradient(160deg, rgba(216,185,120,0.5), rgba(126,184,154,0.3)); }
+  .qbtn[data-q="4"] { background: linear-gradient(160deg, rgba(126,184,154,0.65), rgba(45,110,120,0.45)); }
+  .qbtn[data-q="5"] { background: linear-gradient(160deg, #7eb89a, #2d6e78); box-shadow: 0 0 8px rgba(126,184,154,0.35); }
 
   .empty { color: var(--text-dim); font-size: 14px; padding: 24px 0; text-align: center; }
 </style>
@@ -209,9 +254,9 @@
   <h1>Steady</h1>
   <p class="tagline">Log what you studied. Steady tells you when to look at it again.</p>
 
-  <div class="panel">
-    <div class="pulse" id="pulse"></div>
-    <div class="pulse-label"><span>28 days ago</span><span>today</span></div>
+  <div class="panel heatmap-panel">
+    <div class="heatmap" id="heatmap"></div>
+    <div class="heatmap-label"><span>28 days ago</span><span>today</span></div>
   </div>
 
   <div class="panel cal-panel">
@@ -222,9 +267,10 @@
     </div>
     <div class="cal-weekdays"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
     <div class="cal-grid" id="calGrid"></div>
+    <div class="cal-detail" id="calDetail" style="display:none"></div>
   </div>
 
-  <div class="panel">
+  <div class="panel add-panel">
     <form class="add-topic" id="addForm">
       <input type="text" id="titleInput" placeholder="What did you study today?" required />
       <select class="project-picker" id="projectPicker" style="display:none"></select>
@@ -249,8 +295,15 @@
     localStorage.setItem('steady_topics', JSON.stringify(localTopics));
   }
 
+  // Single-user app, user is on IST (UTC+5:30, no DST) — see CLAUDE.md.
+  // Anchoring on IST instead of raw UTC matters: without it, the app thinks
+  // it's still yesterday until 5:30am local time.
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  function nowIST() {
+    return new Date(Date.now() + IST_OFFSET_MS);
+  }
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return nowIST().toISOString().slice(0, 10);
   }
 
   function sm2(prev, quality, elapsedDays) {
@@ -274,7 +327,7 @@
     }
     ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
     if (ef < 1.3) ef = 1.3;
-    const next = new Date();
+    const next = nowIST();
     next.setUTCDate(next.getUTCDate() + interval_days);
     return { ef, interval_days, repetitions, next_due: next.toISOString().slice(0, 10) };
   }
@@ -306,7 +359,7 @@
     const days = [];
     const reviewDates = localTopics.flatMap((t) => t.reviewLog || []);
     for (let i = 27; i >= 0; i--) {
-      const d = new Date();
+      const d = nowIST();
       d.setUTCDate(d.getUTCDate() - i);
       const key = d.toISOString().slice(0, 10);
       days.push({ day: key, count: reviewDates.filter((r) => r === key).length });
@@ -315,6 +368,8 @@
   }
 
   let calMonth = todayISO().slice(0, 7);
+  let calDays = {};
+  let selectedCalDay = null;
 
   async function loadCalendar(month) {
     if (!useLocal) {
@@ -357,15 +412,43 @@
       const classes = ['cal-day'];
       if (isToday) classes.push('today');
       if (tier > 0) classes.push(isOverdue ? `overdue-${tier}` : `due-${tier}`, 'has-due');
+      if (dateStr === selectedCalDay) classes.push('selected');
       const badge = count > 3 ? `<div class="cal-badge">${count}</div>` : '';
       const titleAttr = due.length ? ` title="${escapeHtml(due.map((t) => t.title).join('\n'))}"` : '';
-      html += `<div class="${classes.join(' ')}"${titleAttr}><span>${d}</span>${badge}</div>`;
+      const dateAttr = due.length ? ` data-date="${dateStr}"` : '';
+      html += `<div class="${classes.join(' ')}"${titleAttr}${dateAttr}><span>${d}</span>${badge}</div>`;
     }
     document.getElementById('calGrid').innerHTML = html;
   }
 
+  function renderCalDetail() {
+    const detail = document.getElementById('calDetail');
+    const due = selectedCalDay ? (calDays[selectedCalDay] || []) : [];
+    if (!selectedCalDay || !due.length) {
+      detail.style.display = 'none';
+      detail.innerHTML = '';
+      return;
+    }
+    const today = todayISO();
+    const actionable = selectedCalDay <= today; // today or overdue: can review right here
+    detail.style.display = '';
+    detail.innerHTML = `
+      <div class="cal-detail-title">${due.length} due ${selectedCalDay}${actionable ? '' : ' (not due yet)'}</div>
+      ${due.map((t) => `
+        <div class="cal-detail-topic" data-detail-id="${t.id}">
+          <span>${escapeHtml(t.title)}</span>
+          ${actionable
+            ? `<div class="cal-detail-quality">${[0, 1, 2, 3, 4, 5].map((q) => `<button type="button" class="qbtn" data-q="${q}" data-id="${t.id}" data-detail-review="1">${q}</button>`).join('')}</div>`
+            : ''}
+        </div>`).join('')}
+    `;
+  }
+
   async function refreshCalendar() {
-    renderCalendar(await loadCalendar(calMonth));
+    const result = await loadCalendar(calMonth);
+    calDays = result.days || {};
+    renderCalendar(result);
+    renderCalDetail();
   }
 
   // Best-effort only: a missing/unconfigured Todoist token shouldn't flip
@@ -424,14 +507,13 @@
     return topic;
   }
 
-  function renderPulse(days) {
-    const max = Math.max(1, ...days.map((d) => d.count));
-    const pulse = document.getElementById('pulse');
-    pulse.innerHTML = days
+  function renderHeatmap(days) {
+    const heatmap = document.getElementById('heatmap');
+    heatmap.innerHTML = days
       .map((d) => {
-        const h = Math.max(3, Math.round((d.count / max) * 60));
-        const active = d.count > 0 ? 'active' : '';
-        return `<div class="pulse-bar ${active}" style="height:${h}px" title="${d.day}: ${d.count} review${d.count === 1 ? '' : 's'}"></div>`;
+        const tier = d.count === 0 ? 0 : d.count <= 1 ? 1 : d.count <= 3 ? 2 : 3;
+        const cls = tier > 0 ? `heat-cell heat-${tier}` : 'heat-cell';
+        return `<div class="${cls}" title="${d.day}: ${d.count} review${d.count === 1 ? '' : 's'}"></div>`;
       })
       .join('');
   }
@@ -447,11 +529,12 @@
       .map((t) => {
         const overdue = t.next_due < today ? 'overdue' : '';
         const dueLabel = t.next_due === today ? 'due today' : t.next_due < today ? 'overdue' : `due ${t.next_due}`;
+        const statusClass = t.next_due < today ? 'status-overdue' : t.next_due === today ? 'status-today' : '';
         const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
         const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
         if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
         return `
-          <div class="topic" data-id="${t.id}">
+          <div class="topic ${statusClass}" data-id="${t.id}">
             <div style="flex:1">
               <div class="topic-title">${escapeHtml(t.title)}</div>
               <div class="topic-meta">${metaBits.join(' · ')}</div>
@@ -476,7 +559,7 @@
   async function refresh() {
     const [topics, stats] = await Promise.all([loadTopics(), loadStats()]);
     renderTopics(topics);
-    renderPulse(stats);
+    renderHeatmap(stats);
     refreshCalendar();
   }
 
@@ -505,8 +588,25 @@
     refresh(); // re-render so any already-loaded topics pick up project names
   })();
 
-  document.getElementById('calPrev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); refreshCalendar(); });
-  document.getElementById('calNext').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); refreshCalendar(); });
+  document.getElementById('calPrev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); selectedCalDay = null; refreshCalendar(); });
+  document.getElementById('calNext').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); selectedCalDay = null; refreshCalendar(); });
+
+  document.getElementById('calGrid').addEventListener('click', (e) => {
+    const cell = e.target.closest('.cal-day[data-date]');
+    if (!cell) return;
+    const date = cell.dataset.date;
+    selectedCalDay = selectedCalDay === date ? null : date;
+    renderCalendar({ month: calMonth, days: calDays });
+    renderCalDetail();
+  });
+
+  document.getElementById('calDetail').addEventListener('click', async (e) => {
+    if (e.target.dataset.detailReview === undefined) return;
+    const id = e.target.dataset.id;
+    const q = Number(e.target.dataset.q);
+    await reviewTopic(useLocal ? Number(id) : id, q);
+    refresh();
+  });
 
   document.getElementById('topicList').addEventListener('click', async (e) => {
     const archiveId = e.target.dataset.archive;

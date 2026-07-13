@@ -6,7 +6,7 @@
  *   POST   /api/topics              create a topic { title, notes? }
  *   POST   /api/topics/:id/review   record a review { quality: 0-5 } -> runs SM-2, returns updated topic
  *   DELETE /api/topics/:id          archive a topic
- *   GET    /api/stats               28-day review counts, for the pulse histogram
+ *   GET    /api/stats               28-day review counts, for the activity heatmap
  *   GET    /api/calendar            due-topic counts/titles by day, for a given month
  *   GET    /api/todoist/projects    list Todoist projects (for the destination picker)
  *
@@ -16,7 +16,13 @@
  * and pushes a matching Todoist task for each, labelled with REVISION_LABEL.
  */
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// This app is single-user and that user is on IST (UTC+5:30, no DST) — see
+// CLAUDE.md. Every "what day is it" calculation anchors on IST, not raw UTC,
+// otherwise the app thinks it's still yesterday until 5:30am IST. If the
+// user's timezone ever changes, this constant is the one place to update.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const nowIST = () => new Date(Date.now() + IST_OFFSET_MS);
+const todayISO = () => nowIST().toISOString().slice(0, 10);
 
 function jsonResponse(data, init = {}) {
   return new Response(JSON.stringify(data), {
@@ -70,7 +76,7 @@ function sm2(prev, quality, elapsedDays) {
   ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
   if (ef < 1.3) ef = 1.3;
 
-  const next = new Date();
+  const next = nowIST();
   next.setUTCDate(next.getUTCDate() + interval_days);
 
   return {
@@ -168,11 +174,15 @@ async function handleApi(request, env, url) {
   }
 
   // GET /api/stats — review counts for the last 28 days, oldest first.
+  // SQLite's date() has no timezone concept, so it must be shifted by the
+  // same IST offset as nowIST() above — otherwise a review made in the late
+  // UTC evening (which is already tomorrow in IST) gets grouped under the
+  // wrong day, out of step with the IST-anchored day list below.
   if (method === "GET" && parts.length === 2 && parts[1] === "stats") {
     const { results } = await env.DB.prepare(
-      `SELECT date(reviewed_at) AS day, COUNT(*) AS count
+      `SELECT date(reviewed_at, '+330 minutes') AS day, COUNT(*) AS count
        FROM reviews
-       WHERE reviewed_at >= datetime('now', '-28 days')
+       WHERE reviewed_at >= datetime('now', '-28 days', '+330 minutes')
        GROUP BY day
        ORDER BY day ASC`
     ).all();
@@ -181,7 +191,7 @@ async function handleApi(request, env, url) {
     const counts = Object.fromEntries(results.map((r) => [r.day, r.count]));
     const days = [];
     for (let i = 27; i >= 0; i--) {
-      const d = new Date();
+      const d = nowIST();
       d.setUTCDate(d.getUTCDate() - i);
       const key = d.toISOString().slice(0, 10);
       days.push({ day: key, count: counts[key] ?? 0 });
