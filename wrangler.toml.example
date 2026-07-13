@@ -18,9 +18,13 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 crons = ["30 23 * * *"]
 
 # --- Static frontend, served by the same Worker ---
+# run_worker_first: without this, Cloudflare serves static assets directly
+# and never invokes fetch() for them — which would skip the Basic Auth
+# check entirely for the frontend page itself.
 [assets]
 directory = "./public"
 binding = "ASSETS"
+run_worker_first = true
 
 # --- Non-secret config ---
 # Default destination project; individual topics can override this with
