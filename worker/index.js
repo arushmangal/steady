@@ -7,6 +7,7 @@
  *   POST   /api/topics/:id/review   record a review { quality: 0-5 } -> runs SM-2, returns updated topic
  *   DELETE /api/topics/:id          archive a topic
  *   GET    /api/stats               28-day review counts, for the pulse histogram
+ *   GET    /api/calendar            due-topic counts/titles by day, for a given month
  *   GET    /api/todoist/projects    list Todoist projects (for the destination picker)
  *
  * Anything else falls through to the static assets binding (the frontend in /public).
@@ -25,10 +26,12 @@ function jsonResponse(data, init = {}) {
 }
 
 /**
- * SM-2 scheduling. Given current state and a 0-5 quality rating, returns
- * the next { ef, interval_days, repetitions, next_due }.
+ * SM-2 scheduling, with an elapsed-time correction on 3rd+ successful
+ * reviews (see CLAUDE.md for full derivation/sourcing). Given current
+ * state, a 0-5 quality rating, and the real elapsed days since the last
+ * review, returns the next { ef, interval_days, repetitions, next_due }.
  */
-function sm2(prev, quality) {
+function sm2(prev, quality, elapsedDays) {
   let { ef, interval_days, repetitions } = prev;
 
   if (quality < 3) {
@@ -42,7 +45,24 @@ function sm2(prev, quality) {
     } else if (repetitions === 2) {
       interval_days = 6;
     } else {
-      interval_days = Math.round(interval_days * ef);
+      // SM-2's own prediction — also SuperMemo SM-4's matrix seed value
+      // OI(n,EF) = OI(n-1,EF)*EF, i.e. what OI defaults to before any
+      // real-observation refinement.
+      const naive = interval_days * ef;
+      // SuperMemo SM-4's published per-observation formula (Wozniak,
+      // super-memory.com/english/ol/sm4.htm), applied directly against
+      // this topic's own state rather than a shared cross-item matrix —
+      // see CLAUDE.md for why the matrix layer itself isn't used.
+      const oiPrime = elapsedDays + (elapsedDays * (1 - 1 / ef)) / 2 * (0.25 * quality - 1);
+      // FRACTION: Wozniak's own blending weight, left as "any number
+      // between 0 and 1" with no published default — chosen conservatively
+      // here since a single review has no cross-item pooling to smooth it.
+      const FRACTION = 0.3;
+      const blended = (1 - FRACTION) * naive + FRACTION * oiPrime;
+      // A successful review must never shrink the interval below what's
+      // already scheduled (verified failure mode on early/same-day reviews
+      // without this floor — see CLAUDE.md).
+      interval_days = Math.max(interval_days, Math.round(blended));
     }
   }
 
@@ -119,8 +139,12 @@ async function handleApi(request, env, url) {
     const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
     if (!topic) return jsonResponse({ error: "not found" }, { status: 404 });
 
+    const elapsedDays = topic.last_reviewed
+      ? Math.round((Date.parse(todayISO()) - Date.parse(topic.last_reviewed)) / 86400000)
+      : 0;
+
     const before = { ef: topic.ef, interval_days: topic.interval_days, repetitions: topic.repetitions };
-    const after = sm2(before, quality);
+    const after = sm2(before, quality, elapsedDays);
 
     await env.DB.batch([
       env.DB.prepare(
@@ -163,6 +187,28 @@ async function handleApi(request, env, url) {
       days.push({ day: key, count: counts[key] ?? 0 });
     }
     return jsonResponse(days);
+  }
+
+  // GET /api/calendar?month=YYYY-MM — due topics grouped by day, for the
+  // forward-looking calendar view. Defaults to the current month.
+  if (method === "GET" && parts.length === 2 && parts[1] === "calendar") {
+    const monthParam = url.searchParams.get("month");
+    const month = /^\d{4}-\d{2}$/.test(monthParam || "") ? monthParam : todayISO().slice(0, 7);
+    const [y, m] = month.split("-").map(Number);
+    const first = `${month}-01`;
+    const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); // day 0 of next month = last day of this month
+
+    const { results } = await env.DB.prepare(
+      `SELECT id, title, next_due FROM topics WHERE archived = 0 AND next_due BETWEEN ? AND ? ORDER BY next_due ASC`
+    )
+      .bind(first, last)
+      .all();
+
+    const days = {};
+    for (const r of results) {
+      (days[r.next_due] ||= []).push({ id: r.id, title: r.title });
+    }
+    return jsonResponse({ month, days });
   }
 
   return jsonResponse({ error: "not found" }, { status: 404 });

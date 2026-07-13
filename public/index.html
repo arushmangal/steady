@@ -55,6 +55,85 @@
   .pulse-bar.active { background: var(--accent); }
   .pulse-label { color: var(--text-dim); font-size: 11px; margin-top: 8px; display: flex; justify-content: space-between; }
 
+  /* Calendar: forward-looking due dates */
+  .panel.cal-panel {
+    background: linear-gradient(135deg, #17302b 0%, #241a2e 55%, #111110 100%);
+    border-color: #33302f;
+  }
+  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .cal-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 18px;
+    padding-bottom: 4px;
+    background-image: linear-gradient(90deg, var(--accent), #d8b978);
+    background-size: 100% 2px;
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+  }
+  .cal-nav {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 28px; height: 28px; border-radius: 6px; padding: 0;
+    font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  .cal-nav:hover { border-color: var(--accent-dim); color: var(--text); }
+  .cal-weekdays {
+    display: grid; grid-template-columns: repeat(7,1fr);
+    text-align: center; color: var(--text-dim); font-size: 11px; margin-bottom: 6px;
+  }
+  .cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; }
+  .cal-day {
+    aspect-ratio: 1;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    position: relative;
+    font-size: 12px;
+    color: var(--text-dim);
+    transition: background 0.3s, box-shadow 0.3s, border-color 0.3s, transform 0.15s;
+  }
+  .cal-day.empty { border-color: transparent; background: transparent; }
+  .cal-day.today {
+    border-color: var(--accent);
+    color: var(--text);
+    font-weight: 600;
+    animation: cal-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes cal-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(126,184,154,0.12); }
+    50% { box-shadow: 0 0 0 5px rgba(126,184,154,0.22); }
+  }
+  .cal-day.due-1 { background: linear-gradient(160deg, rgba(126,184,154,0.28), rgba(79,125,104,0.22)); color: var(--text); }
+  .cal-day.due-2 {
+    background: linear-gradient(160deg, rgba(126,184,154,0.5), rgba(45,110,120,0.4));
+    color: var(--text); border-color: var(--accent-dim);
+  }
+  .cal-day.due-3 {
+    background: linear-gradient(160deg, #7eb89a, #2d6e78);
+    color: #0d1410; font-weight: 600; border-color: var(--accent);
+    box-shadow: 0 0 14px rgba(126,184,154,0.35);
+  }
+  .cal-day.overdue-1 { background: linear-gradient(160deg, rgba(201,123,107,0.3), rgba(160,80,60,0.22)); color: var(--text); }
+  .cal-day.overdue-2 {
+    background: linear-gradient(160deg, rgba(201,123,107,0.55), rgba(180,90,40,0.4));
+    color: var(--text); border-color: var(--danger);
+  }
+  .cal-day.overdue-3 {
+    background: linear-gradient(160deg, #e0947f, #b5502f);
+    color: #1a0f0d; font-weight: 600; border-color: var(--danger);
+    box-shadow: 0 0 14px rgba(201,123,107,0.4);
+  }
+  .cal-day.has-due { cursor: default; }
+  .cal-day.has-due:hover { transform: scale(1.07); box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
+  .cal-badge {
+    position: absolute; top: 3px; right: 3px; font-size: 9px; font-weight: 700;
+    background: rgba(0,0,0,0.35); border-radius: 999px;
+    min-width: 14px; height: 14px; padding: 0 3px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
   form.add-topic { display: flex; gap: 8px; flex-wrap: wrap; }
   input[type="text"] {
     flex: 1;
@@ -135,6 +214,16 @@
     <div class="pulse-label"><span>28 days ago</span><span>today</span></div>
   </div>
 
+  <div class="panel cal-panel">
+    <div class="cal-header">
+      <button type="button" class="cal-nav" id="calPrev" aria-label="Previous month">&lsaquo;</button>
+      <div class="cal-title" id="calTitle"></div>
+      <button type="button" class="cal-nav" id="calNext" aria-label="Next month">&rsaquo;</button>
+    </div>
+    <div class="cal-weekdays"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+    <div class="cal-grid" id="calGrid"></div>
+  </div>
+
   <div class="panel">
     <form class="add-topic" id="addForm">
       <input type="text" id="titleInput" placeholder="What did you study today?" required />
@@ -164,7 +253,7 @@
     return new Date().toISOString().slice(0, 10);
   }
 
-  function sm2(prev, quality) {
+  function sm2(prev, quality, elapsedDays) {
     let { ef, interval_days, repetitions } = prev;
     if (quality < 3) {
       repetitions = 0;
@@ -173,7 +262,15 @@
       repetitions += 1;
       if (repetitions === 1) interval_days = 1;
       else if (repetitions === 2) interval_days = 6;
-      else interval_days = Math.round(interval_days * ef);
+      else {
+        // Mirrors worker/index.js's sm2() exactly — see CLAUDE.md for the
+        // SM-4-sourced derivation of this elapsed-time correction.
+        const naive = interval_days * ef;
+        const oiPrime = elapsedDays + (elapsedDays * (1 - 1 / ef)) / 2 * (0.25 * quality - 1);
+        const FRACTION = 0.3;
+        const blended = (1 - FRACTION) * naive + FRACTION * oiPrime;
+        interval_days = Math.max(interval_days, Math.round(blended));
+      }
     }
     ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
     if (ef < 1.3) ef = 1.3;
@@ -217,6 +314,60 @@
     return days;
   }
 
+  let calMonth = todayISO().slice(0, 7);
+
+  async function loadCalendar(month) {
+    if (!useLocal) {
+      try { return await apiFetch(`/calendar?month=${month}`); } catch (e) { /* fall through */ }
+    }
+    const days = {};
+    for (const t of localTopics) {
+      if (t.archived) continue;
+      if (t.next_due && t.next_due.startsWith(month)) {
+        (days[t.next_due] ||= []).push({ id: t.id, title: t.title });
+      }
+    }
+    return { month, days };
+  }
+
+  function shiftMonth(month, delta) {
+    const [y, m] = month.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  function renderCalendar({ month, days }) {
+    const [y, m] = month.split('-').map(Number);
+    document.getElementById('calTitle').textContent =
+      new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+    const firstWeekday = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const today = todayISO();
+
+    let html = '';
+    for (let i = 0; i < firstWeekday; i++) html += '<div class="cal-day empty"></div>';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${month}-${String(d).padStart(2, '0')}`;
+      const due = days[dateStr] || [];
+      const count = due.length;
+      const isToday = dateStr === today;
+      const isOverdue = dateStr < today && count > 0;
+      const tier = count === 0 ? 0 : count <= 1 ? 1 : count <= 3 ? 2 : 3;
+      const classes = ['cal-day'];
+      if (isToday) classes.push('today');
+      if (tier > 0) classes.push(isOverdue ? `overdue-${tier}` : `due-${tier}`, 'has-due');
+      const badge = count > 3 ? `<div class="cal-badge">${count}</div>` : '';
+      const titleAttr = due.length ? ` title="${escapeHtml(due.map((t) => t.title).join('\n'))}"` : '';
+      html += `<div class="${classes.join(' ')}"${titleAttr}><span>${d}</span>${badge}</div>`;
+    }
+    document.getElementById('calGrid').innerHTML = html;
+  }
+
+  async function refreshCalendar() {
+    renderCalendar(await loadCalendar(calMonth));
+  }
+
   // Best-effort only: a missing/unconfigured Todoist token shouldn't flip
   // the whole app into localStorage mode, so this doesn't touch `useLocal`.
   async function loadTodoistProjects() {
@@ -238,7 +389,7 @@
     }
     const topic = {
       id: Date.now(), title, ef: 2.5, interval_days: 0, repetitions: 0,
-      next_due: todayISO(), archived: 0, reviewLog: [],
+      next_due: todayISO(), last_reviewed: null, archived: 0, reviewLog: [],
     };
     localTopics.push(topic);
     saveLocal();
@@ -261,8 +412,12 @@
       }); } catch (e) { /* fall through */ }
     }
     const topic = localTopics.find((t) => t.id === id);
-    const after = sm2(topic, quality);
+    const elapsedDays = topic.last_reviewed
+      ? Math.round((Date.parse(todayISO()) - Date.parse(topic.last_reviewed)) / 86400000)
+      : 0;
+    const after = sm2(topic, quality, elapsedDays);
     Object.assign(topic, after);
+    topic.last_reviewed = todayISO();
     topic.reviewLog = topic.reviewLog || [];
     topic.reviewLog.push(todayISO());
     saveLocal();
@@ -322,6 +477,7 @@
     const [topics, stats] = await Promise.all([loadTopics(), loadStats()]);
     renderTopics(topics);
     renderPulse(stats);
+    refreshCalendar();
   }
 
   document.getElementById('addForm').addEventListener('submit', async (e) => {
@@ -348,6 +504,9 @@
     picker.style.display = '';
     refresh(); // re-render so any already-loaded topics pick up project names
   })();
+
+  document.getElementById('calPrev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); refreshCalendar(); });
+  document.getElementById('calNext').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); refreshCalendar(); });
 
   document.getElementById('topicList').addEventListener('click', async (e) => {
     const archiveId = e.target.dataset.archive;
