@@ -29,8 +29,12 @@ the fix, since they already live in it daily).
   **This was `/rest/v2/` until 2026-07-14** — Todoist fully decommissioned
   REST v2 (confirmed: it now returns `410 Gone`), which meant the entire
   Todoist integration had been silently broken from the moment
-  `TODOIST_API_TOKEN` was first set, since `pushToTodoist` swallows failures
-  into a `console.error` rather than surfacing them. Found by actually
+  `TODOIST_API_TOKEN` was first set, since `pushToTodoist` **used to**
+  swallow failures into a `console.error` rather than surfacing them (fixed
+  the same day the `sync_log`/health-check system below was built —
+  `pushToTodoist` now throws on a non-OK Todoist response instead of
+  swallowing it, specifically so this exact failure mode gets caught by the
+  health-check rather than repeating itself silently). Found by actually
   triggering a real push against the real API with the real token — this is
   exactly the kind of failure that stays invisible until someone tests the
   real thing, not just the code around it. The migration also **silently
@@ -58,8 +62,21 @@ a real Todoist project (not just a first draft anymore).
   day, for the calendar view), a `scheduled()` handler that pushes due
   topics to Todoist (per-topic `pushToTodoist` failures are caught
   individually so one bad topic doesn't stop the rest of the daily batch),
-  and a Basic Auth gate (`checkAuth`, constant-time comparison via HMAC) in
-  front of every route. The auth gate is inert until
+  a **sync health-check** (`sync_log` table + `runOperation` wrapper +
+  `GET /api/sync-status`, surfaced in the UI as a "Last sync: N pushed, N
+  failed" line) so a cron-side failure shows up somewhere a human will
+  actually see it instead of only in the Worker's own logs — this is a
+  direct response to the REST v2 incident above, which was invisible for
+  an unknown stretch of time for exactly this reason. Every cron-driven
+  Todoist operation (the daily push, and any future ones) must call
+  through `runOperation` so it always produces exactly one `sync_log` row,
+  success or failure — a cron function that doesn't do this is invisible
+  again by construction. `runDailyPush` itself no longer swallows anything;
+  it returns `{succeeded, failed}` and `pushToTodoist` throws on failure
+  rather than logging-and-returning, so a failed push is actually counted,
+  not silently treated as a success by the caller's `try/catch`. Also a
+  Basic Auth gate (`checkAuth`, constant-time comparison via HMAC) in front
+  of every route. The auth gate is inert until
   `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` secrets are set.
 - `schema.sql` — three tables: `topics` (includes `todoist_project_id` for
   per-topic Todoist destination overrides, and `category_id`), `reviews`,

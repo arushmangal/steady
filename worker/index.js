@@ -293,6 +293,35 @@ async function handleApi(request, env, url) {
     return jsonResponse(results.map((p) => ({ id: p.id, name: p.name, parent_id: p.parent_id || null })));
   }
 
+  // GET /api/sync-status — last cron-driven Todoist operation of each kind,
+  // so a silent failure shows up in the UI instead of only in the Worker's
+  // own logs. `null` for an operation that hasn't shipped/run yet.
+  if (method === "GET" && parts.length === 2 && parts[1] === "sync-status") {
+    const operations = ["push", "import", "completion_sync"];
+    const result = {};
+    for (const operation of operations) {
+      const row = await env.DB.prepare(
+        `SELECT run_at, ok, succeeded, failed, detail FROM sync_log WHERE operation = ? ORDER BY id DESC LIMIT 1`
+      ).bind(operation).first();
+      if (!row) {
+        result[operation] = null;
+        continue;
+      }
+      // Instant-to-instant duration, not a "which calendar day" question —
+      // deliberately doesn't need the +330 minutes/nowIST() IST treatment
+      // that date-bucketing queries elsewhere in this file do. SQLite's
+      // datetime('now') is UTC but formatted as "YYYY-MM-DD HH:MM:SS" (space,
+      // no zone) — not valid ISO 8601, and Date.parse on that exact shape is
+      // engine-dependent (some parse it as local time). Normalize to a real
+      // UTC ISO string before parsing.
+      const staleMs = 26 * 60 * 60 * 1000;
+      const runAtUtc = row.run_at.replace(" ", "T") + "Z";
+      const stale = Date.now() - Date.parse(runAtUtc) > staleMs;
+      result[operation] = { ...row, ok: !!row.ok, stale };
+    }
+    return jsonResponse(result);
+  }
+
   // POST /api/topics/:id/review
   if (method === "POST" && parts.length === 4 && parts[1] === "topics" && parts[3] === "review") {
     const id = Number(parts[2]);
@@ -441,8 +470,11 @@ async function pushToTodoist(env, topic) {
   });
 
   if (!res.ok) {
-    console.error(`Todoist push failed for topic ${topic.id}: ${res.status} ${await res.text()}`);
-    return;
+    // Throw rather than swallow: runDailyPush's try/catch is what turns
+    // this into a counted failure for the sync-status health-check. This
+    // exact swallow-and-return was how the REST v2 decommission stayed
+    // invisible all last session — don't repeat it here.
+    throw new Error(`Todoist push failed for topic ${topic.id}: ${res.status} ${await res.text()}`);
   }
 
   const task = await res.json();
@@ -458,15 +490,46 @@ async function runDailyPush(env) {
     .bind(todayISO())
     .all();
 
+  let succeeded = 0;
+  let failed = 0;
   for (const topic of results) {
     try {
       await pushToTodoist(env, topic);
+      succeeded++;
     } catch (err) {
       // One bad topic (network blip, bad project id, etc.) shouldn't stop
       // the rest of today's batch from reaching Todoist.
       console.error(`pushToTodoist threw for topic ${topic.id}: ${err}`);
+      failed++;
     }
   }
+  return { succeeded, failed };
+}
+
+// Wraps a cron-driven Todoist operation so it always produces exactly one
+// sync_log row, whether it succeeds, partially fails, or throws outright -
+// the whole point is that a silent failure (like the REST v2 decommission
+// this project already hit once) shows up here instead of only ever in a
+// console.error nobody's watching.
+async function runOperation(env, operation, fn) {
+  try {
+    const { succeeded, failed } = await fn(env);
+    await env.DB.prepare(
+      `INSERT INTO sync_log (operation, ok, succeeded, failed) VALUES (?, 1, ?, ?)`
+    ).bind(operation, succeeded, failed).run();
+  } catch (err) {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO sync_log (operation, ok, succeeded, failed, detail) VALUES (?, 0, 0, 0, ?)`
+      ).bind(operation, String(err)).run();
+    } catch (logErr) {
+      console.error(`sync_log write itself failed for ${operation}: ${logErr}`);
+    }
+  }
+}
+
+async function runScheduledSync(env) {
+  await runOperation(env, "push", runDailyPush);
 }
 
 /**
@@ -524,6 +587,6 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runDailyPush(env));
+    ctx.waitUntil(runScheduledSync(env));
   },
 };
