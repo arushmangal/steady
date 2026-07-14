@@ -5,6 +5,7 @@
  *   GET    /api/topics              list active topics, ordered by next_due
  *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id? }
  *   POST   /api/topics/:id/review   record a review { quality: 0-5 } -> runs SM-2, returns updated topic
+ *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
  *   POST   /api/topics/:id/category reassign a topic's category { category_id }
  *   DELETE /api/topics/:id          archive a topic
  *   GET    /api/categories          list active categories (flat; frontend builds the tree)
@@ -14,6 +15,7 @@
  *   GET    /api/stats               28-day review counts, for the activity heatmap
  *   GET    /api/calendar            due-topic counts/titles by day, for a given month
  *   GET    /api/todoist/projects    list Todoist projects (for the destination picker)
+ *   GET    /api/sync-status         last cron-driven Todoist operation of each kind (push/import/completion_sync)
  *
  * Anything else falls through to the static assets binding (the frontend in /public).
  *
@@ -346,12 +348,48 @@ async function handleApi(request, env, url) {
         `UPDATE topics SET ef = ?, interval_days = ?, repetitions = ?, next_due = ?, last_reviewed = ? WHERE id = ?`
       ).bind(after.ef, after.interval_days, after.repetitions, after.next_due, todayISO(), id),
       env.DB.prepare(
-        `INSERT INTO reviews (topic_id, quality, ef_before, ef_after, interval_before, interval_after)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(id, quality, before.ef, after.ef, before.interval_days, after.interval_days),
+        `INSERT INTO reviews (topic_id, quality, ef_before, ef_after, interval_before, interval_after,
+                               repetitions_before, next_due_before, last_reviewed_before)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        id, quality, before.ef, after.ef, before.interval_days, after.interval_days,
+        before.repetitions, topic.next_due, topic.last_reviewed
+      ),
     ]);
 
     const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+    return jsonResponse(updated);
+  }
+
+  // POST /api/topics/:id/undo-review — reverts the topic's most recent
+  // review: restores its exact prior ef/interval_days/repetitions/next_due/
+  // last_reviewed and deletes that review row. Always acts on "whichever
+  // review is currently latest" for this topic rather than a client-supplied
+  // review id — no stale-id race to guard, since the frontend's single
+  // global undo-toast slot means a new review always replaces any pending
+  // undo before this could be called on the wrong one.
+  if (method === "POST" && parts.length === 4 && parts[1] === "topics" && parts[3] === "undo-review") {
+    const id = Number(parts[2]);
+    const review = await env.DB.prepare(
+      `SELECT * FROM reviews WHERE topic_id = ? ORDER BY id DESC LIMIT 1`
+    ).bind(id).first();
+    if (!review) return jsonResponse({ error: "no review to undo" }, { status: 400 });
+    if (review.next_due_before === null) {
+      return jsonResponse({ error: "this review predates undo support" }, { status: 400 });
+    }
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE topics SET ef = ?, interval_days = ?, repetitions = ?, next_due = ?, last_reviewed = ? WHERE id = ?`
+      ).bind(
+        review.ef_before, review.interval_before, review.repetitions_before,
+        review.next_due_before, review.last_reviewed_before, id
+      ),
+      env.DB.prepare(`DELETE FROM reviews WHERE id = ?`).bind(review.id),
+    ]);
+
+    const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+    if (!updated) return jsonResponse({ error: "not found" }, { status: 404 });
     return jsonResponse(updated);
   }
 

@@ -88,6 +88,18 @@
   }
   .heatmap-label { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; justify-content: space-between; }
   .sync-status { color: var(--text-dim); font-size: 11px; margin-top: 10px; }
+  .undo-toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; color: var(--text);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    display: flex; align-items: center; gap: 12px; z-index: 100;
+  }
+  .undo-toast button {
+    background: none; border: none; color: var(--accent); font-weight: 600;
+    padding: 0; font-size: 13px; cursor: pointer;
+  }
+  .undo-toast button:hover { filter: none; transform: none; box-shadow: none; text-decoration: underline; }
 
   /* Calendar: forward-looking due dates */
   .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
@@ -363,6 +375,8 @@
     <div id="topicList"></div>
   </div>
 </div>
+
+<div class="undo-toast" id="undoToast" style="display:none"></div>
 
 <script>
   // Same-origin API served by the Worker. Falls back to localStorage if
@@ -811,6 +825,11 @@
     return { ok: true };
   }
 
+  // Local-mode undo support: a one-slot snapshot of a topic's pre-review
+  // state, transient/in-memory only (matches the undo toast's own 5-6s
+  // lifetime — nothing here needs to survive a reload).
+  let lastLocalUndoSnapshot = null; // { topicId, ef, interval_days, repetitions, next_due, last_reviewed }
+
   async function reviewTopic(id, quality) {
     if (!useLocal) {
       try { return await apiFetch(`/topics/${id}/review`, {
@@ -819,6 +838,10 @@
       }); } catch (e) { /* fall through */ }
     }
     const topic = localTopics.find((t) => t.id === id);
+    lastLocalUndoSnapshot = {
+      topicId: id, ef: topic.ef, interval_days: topic.interval_days,
+      repetitions: topic.repetitions, next_due: topic.next_due, last_reviewed: topic.last_reviewed,
+    };
     const elapsedDays = topic.last_reviewed
       ? Math.round((Date.parse(todayISO()) - Date.parse(topic.last_reviewed)) / 86400000)
       : 0;
@@ -829,6 +852,40 @@
     topic.reviewLog.push(todayISO());
     saveLocal();
     return topic;
+  }
+
+  async function undoReview(id) {
+    if (!useLocal) {
+      const result = await apiPost(`/topics/${id}/undo-review`, 'POST');
+      return result.ok;
+    }
+    if (!lastLocalUndoSnapshot || lastLocalUndoSnapshot.topicId !== id) return false;
+    const topic = localTopics.find((t) => t.id === id);
+    if (!topic) return false;
+    const { ef, interval_days, repetitions, next_due, last_reviewed } = lastLocalUndoSnapshot;
+    Object.assign(topic, { ef, interval_days, repetitions, next_due, last_reviewed });
+    topic.reviewLog.pop(); // otherwise the heatmap would still count the undone review
+    lastLocalUndoSnapshot = null;
+    saveLocal();
+    return true;
+  }
+
+  // Single global toast slot, not per-topic: a new review always replaces
+  // any pending undo rather than letting two coexist, which is also what
+  // keeps the backend's "undo whichever review is currently latest" safe
+  // without needing a client-supplied review id.
+  let undoToastTimer = null;
+  function showUndoToast(id, quality) {
+    clearTimeout(undoToastTimer);
+    const toast = document.getElementById('undoToast');
+    toast.innerHTML = `Rated ${quality} <button type="button" id="undoBtn">Undo</button>`;
+    toast.style.display = '';
+    document.getElementById('undoBtn').onclick = async () => {
+      toast.style.display = 'none';
+      const ok = await undoReview(id);
+      if (ok) refresh();
+    };
+    undoToastTimer = setTimeout(() => { toast.style.display = 'none'; }, 6000);
   }
 
   function renderHeatmap(days) {
@@ -1142,7 +1199,9 @@
     if (e.target.dataset.detailReview === undefined) return;
     const id = e.target.dataset.id;
     const q = Number(e.target.dataset.q);
-    await reviewTopic(useLocal ? Number(id) : id, q);
+    const topicId = useLocal ? Number(id) : id;
+    await reviewTopic(topicId, q);
+    showUndoToast(topicId, q);
     refresh();
   });
 
@@ -1174,7 +1233,9 @@
     const q = e.target.dataset.q;
     const id = e.target.dataset.id;
     if (q !== undefined) {
-      await reviewTopic(useLocal ? Number(id) : id, Number(q));
+      const topicId = useLocal ? Number(id) : id;
+      await reviewTopic(topicId, Number(q));
+      showUndoToast(topicId, Number(q));
       refresh();
     }
   });
