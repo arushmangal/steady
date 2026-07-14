@@ -278,14 +278,19 @@ async function handleApi(request, env, url) {
     if (!env.TODOIST_API_TOKEN) {
       return jsonResponse({ error: "TODOIST_API_TOKEN not configured" }, { status: 503 });
     }
-    const res = await fetch("https://api.todoist.com/rest/v2/projects", {
+    // Todoist's REST v2 API is fully decommissioned (410 Gone) — confirmed
+    // by hand against the real API. The unified /api/v1/ API also changed
+    // this endpoint's response shape from a bare array to { results: [...] }
+    // (pagination wrapper); task creation below was NOT similarly wrapped —
+    // verified both shapes directly rather than assuming they moved together.
+    const res = await fetch("https://api.todoist.com/api/v1/projects", {
       headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
     });
     if (!res.ok) {
       return jsonResponse({ error: "failed to fetch Todoist projects" }, { status: 502 });
     }
-    const projects = await res.json();
-    return jsonResponse(projects.map((p) => ({ id: p.id, name: p.name })));
+    const { results } = await res.json();
+    return jsonResponse(results.map((p) => ({ id: p.id, name: p.name })));
   }
 
   // POST /api/topics/:id/review
@@ -417,7 +422,11 @@ async function pushToTodoist(env, topic) {
   }
 
   const projectId = await resolveTodoistProjectId(env, topic);
-  const res = await fetch("https://api.todoist.com/rest/v2/tasks", {
+  // See the /api/todoist/projects route for why this is /api/v1/ now, not
+  // /rest/v2/ — task creation's response shape is unaffected by the same
+  // migration (confirmed directly: still a plain task object with .id at
+  // the top level, not wrapped like the projects list response is).
+  const res = await fetch("https://api.todoist.com/api/v1/tasks", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.TODOIST_API_TOKEN}`,
