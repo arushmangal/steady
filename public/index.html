@@ -1227,7 +1227,12 @@
     }
     const toggleId = e.target.dataset.toggle;
     if (toggleId) {
-      document.getElementById(`qrow-${toggleId}`).classList.toggle('open');
+      const row = document.getElementById(`qrow-${toggleId}`);
+      const opening = !row.classList.contains('open');
+      // At most one quality-row open at a time — otherwise "the currently
+      // open row" is ambiguous for the 0-5 keyboard shortcut below.
+      document.querySelectorAll('.quality-row.open').forEach((r) => r.classList.remove('open'));
+      if (opening) row.classList.add('open');
       return;
     }
     const q = e.target.dataset.q;
@@ -1238,6 +1243,32 @@
       showUndoToast(topicId, Number(q));
       refresh();
     }
+  });
+
+  // Keyboard shortcuts: 0-5 rates whichever quality-row is currently open,
+  // / focuses the add-topic input, left/right arrows move the calendar
+  // month. Everything here only ever .click()s the exact same elements the
+  // mouse already uses, so there's no duplicated review/navigation logic.
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
+
+    if (e.key === '/') {
+      if (isTyping) return; // literal slash types normally, incl. inside the title input itself
+      e.preventDefault();
+      document.getElementById('titleInput').focus();
+      return;
+    }
+    if (isTyping) return;
+
+    if (e.key >= '0' && e.key <= '5') {
+      const openRow = document.querySelector('.quality-row.open');
+      if (!openRow) return;
+      openRow.querySelector(`.qbtn[data-q="${e.key}"]`)?.click();
+      return;
+    }
+    if (e.key === 'ArrowLeft') { document.getElementById('calPrev').click(); return; }
+    if (e.key === 'ArrowRight') { document.getElementById('calNext').click(); return; }
   });
 
   refresh();
