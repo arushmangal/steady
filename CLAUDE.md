@@ -40,15 +40,17 @@ and the Todoist push have all been exercised against a real D1 instance and
 a real Todoist project (not just a first draft anymore).
 
 - `worker/index.js` — routes for topics (CRUD-ish) and reviews, SM-2+
-  scheduling math, a `GET /api/calendar?month=YYYY-MM` route (due topics
-  grouped by day, for the calendar view), a `scheduled()` handler that
-  pushes due topics to Todoist (per-topic `pushToTodoist` failures are
-  caught individually so one bad topic doesn't stop the rest of the daily
-  batch), and a Basic Auth gate (`checkAuth`, constant-time comparison via
-  HMAC) in front of every route. The auth gate is inert until
+  scheduling math, a hierarchical **categories** system (see "Categories"
+  below), a `GET /api/calendar?month=YYYY-MM` route (due topics grouped by
+  day, for the calendar view), a `scheduled()` handler that pushes due
+  topics to Todoist (per-topic `pushToTodoist` failures are caught
+  individually so one bad topic doesn't stop the rest of the daily batch),
+  and a Basic Auth gate (`checkAuth`, constant-time comparison via HMAC) in
+  front of every route. The auth gate is inert until
   `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` secrets are set.
-- `schema.sql` — two tables, `topics` (includes `todoist_project_id` for
-  per-topic destination overrides) and `reviews`.
+- `schema.sql` — three tables: `topics` (includes `todoist_project_id` for
+  per-topic Todoist destination overrides, and `category_id`), `reviews`,
+  and `categories` (self-referential `parent_id`, arbitrary depth).
 - `public/index.html` — single-file frontend (vanilla JS, no build step).
   Near-black background (`#111110`) with a subtle radial-gradient vignette,
   sage green accent (`#7eb89a`), `DM Serif Display` for the wordmark
@@ -58,8 +60,11 @@ a real Todoist project (not just a first draft anymore).
   backdrop, tiered color-pop fills by due-count, glowing "today" ring;
   clicking a due day opens an inline detail panel listing what's due, with
   quality-rating buttons to review directly from the calendar for
-  today/overdue days), a Todoist project picker in the add-topic form, an
-  archive button and color-coded left-border accent per topic (by
+  today/overdue days), a Todoist project picker and category picker in the
+  add-topic form, a collapsed-by-default category manager panel, a topic
+  list grouped by category when any category exists (exact flat list
+  otherwise — zero visible change for anyone who hasn't used the feature),
+  an archive button and color-coded left-border accent per topic (by
   overdue/due-today/upcoming status), and a "pushed to Todoist" indicator
   dot. Every panel deliberately has real visual identity (gradients, glow,
   hover motion) rather than the flat/muted look the app started with — this
@@ -154,6 +159,66 @@ duplicated in `public/index.html` (client-side, only used in the
 localStorage fallback mode). If you change the algorithm — or the
 `FRACTION` constant — change it in both places or note the drift.
 
+## Categories (hierarchical structure)
+
+Topics can optionally belong to a `categories` tree — **arbitrary depth**
+via a self-referential `parent_id`, not a fixed Project/Subject/Subsection
+schema, because the user's real Todoist organization goes 4+ levels deep
+and irregularly (e.g. "Studying" > "Block A (60 mins)" > "Coding and DSA" >
+"Bari C++ — Part 1"). Categorization is **opt-in per topic** — a topic
+with no `category_id` behaves exactly as it did before this feature
+existed, and the topic list renders as a plain flat list (no stray
+"Uncategorized" header) until at least one category is ever created.
+
+**Todoist project resolution** (in `pushToTodoist` via
+`resolveTodoistProjectId`) walks up the category chain: a topic's own
+`todoist_project_id` override wins outright; otherwise its category's own
+override; otherwise the nearest ancestor category with one set; otherwise
+the global `env.TODOIST_PROJECT_ID` default. This is a plain JS loop over
+`parent_id` (bounded by a `seen` set), not a recursive SQL CTE — this
+codebase consistently picks the boring/verifiable option over the clever
+one (see the SM-2 derivation above and the constant-time auth compare), and
+the performance case for one-query-instead-of-N doesn't matter at this
+app's scale (once per due topic, once per day, against a tree a few levels
+deep).
+
+**Category deletion is a safe, blocked archive, never a cascade** —
+`DELETE /api/categories/:id` returns 400 if the category still has active
+child categories or active topics, naming whichever is nonzero. This
+mirrors topics' own never-hard-delete posture. A **cycle guard**
+(`wouldCreateCycle`, same bounded-walk idiom as Todoist resolution) blocks
+reparenting a category into its own subtree — required regardless of D1's
+FK enforcement, since foreign keys check existence, not acyclicity.
+
+**Migration gotcha**: this repo has no migrations mechanism —
+`schema.sql` is only ever applied as `CREATE TABLE/INDEX IF NOT EXISTS`, so
+adding `topics.category_id` to an already-live database needs a one-off,
+manual sequence, in this exact order (categories table must exist first,
+since the new column's `REFERENCES` target must already exist):
+```
+wrangler d1 execute steady --local  --file=./schema.sql
+wrangler d1 execute steady --local  --command "ALTER TABLE topics ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL;"
+wrangler d1 execute steady --local  --command "CREATE INDEX IF NOT EXISTS idx_topics_category_id ON topics(category_id);"
+```
+...then the same three with `--remote`. D1 enforces SQLite foreign keys by
+default (confirmed empirically: `PRAGMA foreign_keys` returns `1`, and an
+insert with a bogus `category_id` is rejected) — worth remembering before
+any future schema change that isn't a simple `ADD COLUMN`.
+
+**Not built in this pass, by deliberate scope decision**: there's no UI to
+change an *existing* topic's category after creation (the backend route
+`POST /api/topics/:id/category` and the frontend `setTopicCategory()` exist
+and work, just have no button wired to them yet) — consistent with the
+existing open question below about richer topic editing in general.
+Categorization is settable at creation time and via the category
+manager's own rename/reparent, which covers the common case.
+
+There are now **three** places `worker/index.js` and `public/index.html`
+must be kept in sync by hand, not two: `nowIST()`/the timezone offset, the
+SM-2 elapsed-time correction, and the category safe-archive guard
+(`archiveCategory`'s local-mode duplicate of the server's active-children/
+active-topics check).
+
 ## Deployment
 
 Live as a single Cloudflare Worker (D1-backed, static assets served from
@@ -169,6 +234,9 @@ Redeploy with `wrangler deploy` any time after code changes.
 - Whether the `revision` label is the one the user wants, or if they already
   have a naming convention in Todoist for this kind of thing.
 - Whether topics need richer editing beyond archiving (currently DELETE just
-  sets `archived = 1`).
+  sets `archived = 1`). `POST /api/topics/:id/category` narrowly answers
+  "can a topic's category be changed after creation" (yes, via the API) but
+  deliberately doesn't touch this broader question — general title/notes
+  editing and a UI trigger for the category route are still both open.
 - The original v1 design (navy/amber, GitHub-aesthetic) exists conceptually
   but was superseded by v2 — no need to resurrect it unless asked.

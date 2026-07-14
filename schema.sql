@@ -1,11 +1,23 @@
 -- Steady — D1 schema
 -- Run with: wrangler d1 execute steady --remote --file=./schema.sql
 
+CREATE TABLE IF NOT EXISTS categories (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  name               TEXT NOT NULL,
+  parent_id          INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  todoist_project_id TEXT,             -- overrides ancestor/global default when set
+  archived           INTEGER NOT NULL DEFAULT 0,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS topics (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   title           TEXT NOT NULL,
   notes           TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+
+  -- Category (optional; arbitrary-depth tree via categories.parent_id)
+  category_id     INTEGER REFERENCES categories(id) ON DELETE SET NULL,
 
   -- SM-2 state
   ef              REAL NOT NULL DEFAULT 2.5,   -- easiness factor, floor 1.3
@@ -16,7 +28,7 @@ CREATE TABLE IF NOT EXISTS topics (
 
   -- Todoist link
   todoist_task_id    TEXT,
-  todoist_project_id TEXT,             -- overrides TODOIST_PROJECT_ID when set
+  todoist_project_id TEXT,             -- overrides category/ancestor/global default when set
 
   archived        INTEGER NOT NULL DEFAULT 0
 );
@@ -33,5 +45,7 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 CREATE INDEX IF NOT EXISTS idx_topics_next_due ON topics(next_due);
+CREATE INDEX IF NOT EXISTS idx_topics_category_id ON topics(category_id);
+CREATE INDEX IF NOT EXISTS idx_categories_parent_id ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_topic_id ON reviews(topic_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON reviews(reviewed_at);

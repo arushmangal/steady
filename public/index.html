@@ -258,6 +258,30 @@
   .qbtn[data-q="5"] { background: linear-gradient(160deg, #7eb89a, #2d6e78); box-shadow: 0 0 8px rgba(126,184,154,0.35); }
 
   .empty { color: var(--text-dim); font-size: 14px; padding: 24px 0; text-align: center; }
+
+  /* Category manager */
+  .cat-manager summary {
+    cursor: pointer; color: var(--text-dim); font-size: 13px; user-select: none;
+  }
+  .cat-manager summary:hover { color: var(--text); }
+  .cat-manager-body { margin-top: 14px; }
+  form.add-category { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .cat-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .cat-row:last-child { border-bottom: none; }
+  .cat-name { cursor: pointer; }
+  .cat-name:hover { color: var(--accent); }
+  .cat-edit-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px 0; }
+
+  /* Grouped topic list */
+  .cat-header {
+    color: var(--text-dim); font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 14px 0 6px; border-bottom: 1px solid var(--border);
+  }
+  .cat-header:first-child { padding-top: 0; }
 </style>
 </head>
 <body>
@@ -284,10 +308,24 @@
   <div class="panel add-panel">
     <form class="add-topic" id="addForm">
       <input type="text" id="titleInput" placeholder="What did you study today?" required />
+      <select class="project-picker" id="categoryPicker"><option value="">Uncategorized</option></select>
       <select class="project-picker" id="projectPicker" style="display:none"></select>
       <button type="submit">Add</button>
     </form>
   </div>
+
+  <details class="panel cat-manager">
+    <summary>Manage categories</summary>
+    <div class="cat-manager-body">
+      <form class="add-category" id="addCategoryForm">
+        <input type="text" id="categoryNameInput" placeholder="New category name" required />
+        <select class="project-picker" id="categoryParentPicker"><option value="">Top level</option></select>
+        <select class="project-picker" id="categoryTodoistPicker" style="display:none"></select>
+        <button type="submit" class="ghost">Add category</button>
+      </form>
+      <div id="categoryManagerList"></div>
+    </div>
+  </details>
 
   <div class="panel">
     <div id="topicList"></div>
@@ -300,10 +338,15 @@
   const API = '/api';
   let useLocal = false;
   let localTopics = JSON.parse(localStorage.getItem('steady_topics') || '[]');
+  let localCategories = JSON.parse(localStorage.getItem('steady_categories') || '[]');
   let projectsById = {};
 
   function saveLocal() {
     localStorage.setItem('steady_topics', JSON.stringify(localTopics));
+  }
+
+  function saveLocalCategories() {
+    localStorage.setItem('steady_categories', JSON.stringify(localCategories));
   }
 
   // Single-user app, user is on IST (UTC+5:30, no DST) — see CLAUDE.md.
@@ -351,6 +394,33 @@
     } catch (e) {
       useLocal = true;
       throw e;
+    }
+  }
+
+  /**
+   * Like apiFetch, but for writes that have real validation the user can
+   * trigger (e.g. the category cycle guard) — apiFetch treats every non-OK
+   * response as "API unreachable, fall back to localStorage," which would
+   * silently discard a legitimate rejection and duplicate the write locally.
+   * This distinguishes "unreachable" (falls back) from "reachable but
+   * rejected" (surfaces the real error, does NOT fall back).
+   */
+  async function apiPost(path, method, body) {
+    try {
+      const res = await fetch(API + path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status >= 500) useLocal = true;
+        return { ok: false, error: data.error || 'request failed' };
+      }
+      return { ok: true, data };
+    } catch (e) {
+      useLocal = true;
+      return { ok: false, error: 'network error', networkFailure: true };
     }
   }
 
@@ -474,15 +544,16 @@
     }
   }
 
-  async function addTopic(title, todoistProjectId) {
+  async function addTopic(title, todoistProjectId, categoryId) {
     if (!useLocal) {
       try { return await apiFetch('/topics', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, todoist_project_id: todoistProjectId || undefined }),
+        body: JSON.stringify({ title, todoist_project_id: todoistProjectId || undefined, category_id: categoryId || undefined }),
       }); } catch (e) { /* fall through */ }
     }
     const topic = {
       id: Date.now(), title, ef: 2.5, interval_days: 0, repetitions: 0,
+      category_id: categoryId ? Number(categoryId) : null,
       next_due: todayISO(), last_reviewed: null, archived: 0, reviewLog: [],
     };
     localTopics.push(topic);
@@ -496,6 +567,104 @@
     }
     const topic = localTopics.find((t) => t.id === id);
     if (topic) { topic.archived = 1; saveLocal(); }
+  }
+
+  async function setTopicCategory(id, categoryId) {
+    if (!useLocal) {
+      const result = await apiPost(`/topics/${id}/category`, 'POST', { category_id: categoryId || undefined });
+      if (result.ok) return { ok: true };
+      if (!result.networkFailure) return result; // real validation error — don't fall back
+    }
+    const topic = localTopics.find((t) => t.id === id);
+    if (topic) { topic.category_id = categoryId ? Number(categoryId) : null; saveLocal(); }
+    return { ok: true };
+  }
+
+  // --- Categories ---------------------------------------------------------
+
+  async function loadCategories() {
+    if (!useLocal) {
+      try { return await apiFetch('/categories'); } catch (e) { /* fall through */ }
+    }
+    return localCategories.filter((c) => !c.archived);
+  }
+
+  /**
+   * Pure helper: given a flat category list, returns a byId map and a
+   * pre-order traversal (root-first, children immediately after their
+   * parent) with each entry tagged with its depth. Reused by both the
+   * picker population and the grouped topic-list renderer, so the tree
+   * walk exists exactly once.
+   */
+  function buildCategoryTree(categories) {
+    const byId = Object.fromEntries(categories.map((c) => [c.id, c]));
+    const childrenOf = {};
+    for (const c of categories) {
+      const key = c.parent_id ?? 'root';
+      (childrenOf[key] ||= []).push(c);
+    }
+    const order = [];
+    (function walk(parentKey, depth) {
+      for (const c of childrenOf[parentKey] || []) {
+        order.push({ id: c.id, category: c, depth });
+        walk(c.id, depth + 1);
+      }
+    })('root', 0);
+    return { byId, order };
+  }
+
+  async function addCategory(name, parentId, todoistProjectId) {
+    if (!useLocal) {
+      const result = await apiPost('/categories', 'POST', { name, parent_id: parentId || undefined, todoist_project_id: todoistProjectId || undefined });
+      if (result.ok) return result.data;
+      if (!result.networkFailure) return result; // real validation error — don't fall back
+    }
+    const category = {
+      id: Date.now(), name, parent_id: parentId ? Number(parentId) : null,
+      todoist_project_id: todoistProjectId || null, archived: 0,
+    };
+    localCategories.push(category);
+    saveLocalCategories();
+    return category;
+  }
+
+  async function updateCategory(id, changes) {
+    if (!useLocal) {
+      const result = await apiPost(`/categories/${id}`, 'POST', changes);
+      if (result.ok) return result.data;
+      if (!result.networkFailure) return result; // real validation error (e.g. cycle) — don't fall back
+    }
+    const category = localCategories.find((c) => c.id === id);
+    if (category) {
+      if (changes.name !== undefined) category.name = changes.name;
+      if (changes.parent_id !== undefined) category.parent_id = changes.parent_id ? Number(changes.parent_id) : null;
+      if (changes.todoist_project_id !== undefined) category.todoist_project_id = changes.todoist_project_id || null;
+      saveLocalCategories();
+    }
+    return category;
+  }
+
+  // Mirrors the server's safe-archive guard (worker/index.js DELETE
+  // /api/categories/:id) for the localStorage fallback mode — this app is
+  // explicitly designed to run standalone, so the guard needs a copy here
+  // too, not just server-side. Returns { ok: true } or { ok: false, error }.
+  async function archiveCategory(id) {
+    if (!useLocal) {
+      const result = await apiPost(`/categories/${id}`, 'DELETE');
+      if (result.ok) return { ok: true };
+      if (!result.networkFailure) return result;
+    }
+    const childCount = localCategories.filter((c) => c.parent_id === id && !c.archived).length;
+    const topicCount = localTopics.filter((t) => t.category_id === id && !t.archived).length;
+    if (childCount > 0 || topicCount > 0) {
+      const reasons = [];
+      if (childCount > 0) reasons.push(`${childCount} active subcategor${childCount === 1 ? 'y' : 'ies'}`);
+      if (topicCount > 0) reasons.push(`${topicCount} active topic${topicCount === 1 ? '' : 's'}`);
+      return { ok: false, error: `Cannot archive: ${reasons.join(' and ')} still reference this category. Reassign or archive them first.` };
+    }
+    const category = localCategories.find((c) => c.id === id);
+    if (category) { category.archived = 1; saveLocalCategories(); }
+    return { ok: true };
   }
 
   async function reviewTopic(id, quality) {
@@ -530,57 +699,175 @@
   }
 
   let lastTopics = [];
+  let lastCategories = [];
   let confirmingArchiveId = null;
 
-  function renderTopics(topics) {
+  function renderTopicRow(t, today) {
+    const overdue = t.next_due < today ? 'overdue' : '';
+    const dueLabel = t.next_due === today ? 'due today' : t.next_due < today ? 'overdue' : `due ${t.next_due}`;
+    const statusClass = t.next_due < today ? 'status-overdue' : t.next_due === today ? 'status-today' : '';
+    const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
+    const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
+    if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
+    const archiveControl = confirmingArchiveId === t.id
+      ? `<div class="archive-confirm-row">
+           <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Delete?</button>
+           <button type="button" class="archive-cancel" data-cancel-archive="${t.id}">Cancel</button>
+         </div>`
+      : `<button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>`;
+    return `
+      <div class="topic ${statusClass}" data-id="${t.id}">
+        <div style="flex:1">
+          <div class="topic-title">${escapeHtml(t.title)}</div>
+          <div class="topic-meta">${metaBits.join(' · ')}</div>
+          <div class="quality-row" id="qrow-${t.id}">
+            ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
+          </div>
+        </div>
+        <div class="topic-right">
+          ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
+          <div class="topic-due ${overdue}" data-toggle="${t.id}" style="cursor:pointer">${dueLabel}</div>
+          ${archiveControl}
+        </div>
+      </div>`;
+  }
+
+  function renderTopics(topics, categories) {
     lastTopics = topics;
+    if (categories) lastCategories = categories;
     const list = document.getElementById('topicList');
     if (!topics.length) {
       list.innerHTML = '<div class="empty">No topics yet. Add something you studied today.</div>';
       return;
     }
     const today = todayISO();
-    list.innerHTML = topics
-      .map((t) => {
-        const overdue = t.next_due < today ? 'overdue' : '';
-        const dueLabel = t.next_due === today ? 'due today' : t.next_due < today ? 'overdue' : `due ${t.next_due}`;
-        const statusClass = t.next_due < today ? 'status-overdue' : t.next_due === today ? 'status-today' : '';
-        const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
-        const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
-        if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
-        const archiveControl = confirmingArchiveId === t.id
-          ? `<div class="archive-confirm-row">
-               <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Delete?</button>
-               <button type="button" class="archive-cancel" data-cancel-archive="${t.id}">Cancel</button>
-             </div>`
-          : `<button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>`;
-        return `
-          <div class="topic ${statusClass}" data-id="${t.id}">
-            <div style="flex:1">
-              <div class="topic-title">${escapeHtml(t.title)}</div>
-              <div class="topic-meta">${metaBits.join(' · ')}</div>
-              <div class="quality-row" id="qrow-${t.id}">
-                ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
-              </div>
-            </div>
-            <div class="topic-right">
-              ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
-              <div class="topic-due ${overdue}" data-toggle="${t.id}" style="cursor:pointer">${dueLabel}</div>
-              ${archiveControl}
-            </div>
-          </div>`;
-      })
-      .join('');
+
+    // No category ever created: exact flat list, zero visible change from
+    // before this feature existed — no stray "Uncategorized" header either.
+    if (!lastCategories.length) {
+      list.innerHTML = topics.map((t) => renderTopicRow(t, today)).join('');
+      return;
+    }
+
+    const { byId, order } = buildCategoryTree(lastCategories);
+    const byCategoryId = {};
+    const uncategorized = [];
+    for (const t of topics) {
+      if (t.category_id && byId[t.category_id]) (byCategoryId[t.category_id] ||= []).push(t);
+      else uncategorized.push(t);
+    }
+
+    // Ancestors of any category holding topics also get a header, even with
+    // zero topics directly in them (pure "folder" categories).
+    const idsToRender = new Set();
+    for (const catId of Object.keys(byCategoryId)) {
+      let cur = byId[catId];
+      while (cur) {
+        idsToRender.add(cur.id);
+        cur = cur.parent_id ? byId[cur.parent_id] : null;
+      }
+    }
+
+    let html = '';
+    if (uncategorized.length) {
+      html += `<div class="cat-header">Uncategorized</div>`;
+      html += uncategorized.map((t) => renderTopicRow(t, today)).join('');
+    }
+    for (const { id, category, depth } of order) {
+      if (!idsToRender.has(id)) continue;
+      html += `<div class="cat-header" style="padding-left:${depth * 16}px">${escapeHtml(category.name)}</div>`;
+      html += (byCategoryId[id] || []).map((t) => renderTopicRow(t, today)).join('');
+    }
+    list.innerHTML = html;
   }
 
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  // --- Category manager UI -------------------------------------------------
+
+  let todoistProjects = null; // cached from loadTodoistProjects(), shared by the topic and category pickers
+  let editingCategoryId = null;
+  let confirmingCategoryArchiveId = null;
+  let categoryError = null;
+
+  function renderCategoryPickers(categories) {
+    const { order } = buildCategoryTree(categories);
+    const options = order
+      .map(({ category, depth }) => `<option value="${category.id}">${'  '.repeat(depth)}${escapeHtml(category.name)}</option>`)
+      .join('');
+
+    const topicPicker = document.getElementById('categoryPicker');
+    const selectedTopic = topicPicker.value;
+    topicPicker.innerHTML = '<option value="">Uncategorized</option>' + options;
+    topicPicker.value = selectedTopic;
+
+    const parentPicker = document.getElementById('categoryParentPicker');
+    const selectedParent = parentPicker.value;
+    parentPicker.innerHTML = '<option value="">Top level</option>' + options;
+    parentPicker.value = selectedParent;
+  }
+
+  function renderCategoryList(categories) {
+    const list = document.getElementById('categoryManagerList');
+    const errorHtml = categoryError
+      ? `<div class="topic-due overdue" style="display:inline-block;margin-bottom:10px">${escapeHtml(categoryError)}</div>`
+      : '';
+    if (!categories.length) {
+      list.innerHTML = errorHtml + '<div class="empty">No categories yet.</div>';
+      return;
+    }
+    const { order } = buildCategoryTree(categories);
+    list.innerHTML = errorHtml + order.map(({ id, category, depth }) => {
+      const indent = depth * 16;
+      if (editingCategoryId === id) {
+        const parentOptions = order
+          .filter((o) => o.id !== id)
+          .map((o) => `<option value="${o.category.id}" ${o.category.id === category.parent_id ? 'selected' : ''}>${'  '.repeat(o.depth)}${escapeHtml(o.category.name)}</option>`)
+          .join('');
+        const projectOptions = todoistProjects
+          ? todoistProjects.map((p) => `<option value="${p.id}" ${p.id === category.todoist_project_id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
+          : '';
+        return `
+          <div class="cat-edit-row" style="padding-left:${indent}px">
+            <input type="text" class="cat-edit-name" value="${escapeHtml(category.name)}" />
+            <select class="project-picker cat-edit-parent"><option value="">Top level</option>${parentOptions}</select>
+            ${todoistProjects ? `<select class="project-picker cat-edit-project"><option value="">No override</option>${projectOptions}</select>` : ''}
+            <button type="button" class="ghost" data-save-cat="${id}">Save</button>
+            <button type="button" class="ghost" data-cancel-edit-cat="${id}">Cancel</button>
+          </div>`;
+      }
+      if (confirmingCategoryArchiveId === id) {
+        return `
+          <div class="cat-row" style="padding-left:${indent}px">
+            <span>${escapeHtml(category.name)}</span>
+            <div class="archive-confirm-row">
+              <button type="button" class="archive-confirm" data-confirm-cat-archive="${id}">Delete?</button>
+              <button type="button" class="archive-cancel" data-cancel-cat-archive="${id}">Cancel</button>
+            </div>
+          </div>`;
+      }
+      const projectName = category.todoist_project_id ? (projectsById[category.todoist_project_id] || category.todoist_project_id) : null;
+      return `
+        <div class="cat-row" style="padding-left:${indent}px">
+          <span class="cat-name" data-edit-cat="${id}">${escapeHtml(category.name)}${projectName ? ` <span style="color:var(--text-dim);font-size:12px">→ ${escapeHtml(projectName)}</span>` : ''}</span>
+          <button type="button" class="archive-btn" data-archive-cat="${id}" title="Archive">&times;</button>
+        </div>`;
+    }).join('');
+  }
+
+  function renderCategoryManager(categories) {
+    lastCategories = categories;
+    renderCategoryPickers(categories);
+    renderCategoryList(categories);
+  }
+
   async function refresh() {
-    const [topics, stats] = await Promise.all([loadTopics(), loadStats()]);
-    renderTopics(topics);
+    const [topics, stats, categories] = await Promise.all([loadTopics(), loadStats(), loadCategories()]);
+    renderTopics(topics, categories);
     renderHeatmap(stats);
+    renderCategoryManager(categories);
     refreshCalendar();
   }
 
@@ -590,7 +877,8 @@
     const title = input.value.trim();
     if (!title) return;
     const picker = document.getElementById('projectPicker');
-    await addTopic(title, picker.style.display !== 'none' ? picker.value : undefined);
+    const categoryPicker = document.getElementById('categoryPicker');
+    await addTopic(title, picker.style.display !== 'none' ? picker.value : undefined, categoryPicker.value);
     input.value = '';
     refresh();
   });
@@ -598,6 +886,7 @@
   (async () => {
     const projects = await loadTodoistProjects();
     if (!projects || !projects.length) return;
+    todoistProjects = projects;
     projectsById = Object.fromEntries(projects.map((p) => [p.id, p.name]));
     const picker = document.getElementById('projectPicker');
     picker.innerHTML = projects
@@ -606,8 +895,90 @@
     const defaultIdx = projects.findIndex((p) => p.name === 'Steady');
     if (defaultIdx >= 0) picker.selectedIndex = defaultIdx;
     picker.style.display = '';
-    refresh(); // re-render so any already-loaded topics pick up project names
+    const categoryTodoistPicker = document.getElementById('categoryTodoistPicker');
+    categoryTodoistPicker.innerHTML = '<option value="">No override</option>' + projects
+      .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+      .join('');
+    categoryTodoistPicker.style.display = '';
+    refresh(); // re-render so any already-loaded topics/categories pick up project names
   })();
+
+  document.getElementById('addCategoryForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nameInput = document.getElementById('categoryNameInput');
+    const name = nameInput.value.trim();
+    if (!name) return;
+    const parentPicker = document.getElementById('categoryParentPicker');
+    const todoistPicker = document.getElementById('categoryTodoistPicker');
+    await addCategory(name, parentPicker.value, todoistPicker.style.display !== 'none' ? todoistPicker.value : undefined);
+    nameInput.value = '';
+    refresh();
+  });
+
+  document.getElementById('categoryManagerList').addEventListener('click', async (e) => {
+    // .closest() everywhere here, not e.target directly — several of these
+    // targets (e.g. a category name with a "→ ProjectName" hint span
+    // nested inside it) have child markup a click can land on instead of
+    // the element carrying the data attribute.
+    const editEl = e.target.closest('[data-edit-cat]');
+    if (editEl) {
+      editingCategoryId = Number(editEl.dataset.editCat);
+      categoryError = null;
+      renderCategoryList(lastCategories);
+      return;
+    }
+    const cancelEditEl = e.target.closest('[data-cancel-edit-cat]');
+    if (cancelEditEl) {
+      editingCategoryId = null;
+      renderCategoryList(lastCategories);
+      return;
+    }
+    const saveEl = e.target.closest('[data-save-cat]');
+    if (saveEl) {
+      const id = Number(saveEl.dataset.saveCat);
+      const row = saveEl.closest('.cat-edit-row');
+      const name = row.querySelector('.cat-edit-name').value.trim();
+      if (!name) return;
+      const parentId = row.querySelector('.cat-edit-parent').value;
+      const projectPicker = row.querySelector('.cat-edit-project');
+      const todoistProjectId = projectPicker ? projectPicker.value : '';
+      const result = await updateCategory(id, { name, parent_id: parentId || null, todoist_project_id: todoistProjectId || null });
+      if (result && result.error) {
+        categoryError = result.error;
+        renderCategoryList(lastCategories);
+        return;
+      }
+      editingCategoryId = null;
+      categoryError = null;
+      refresh();
+      return;
+    }
+    const archiveEl = e.target.closest('[data-archive-cat]');
+    if (archiveEl) {
+      confirmingCategoryArchiveId = Number(archiveEl.dataset.archiveCat);
+      categoryError = null;
+      renderCategoryList(lastCategories);
+      return;
+    }
+    const cancelArchiveEl = e.target.closest('[data-cancel-cat-archive]');
+    if (cancelArchiveEl) {
+      confirmingCategoryArchiveId = null;
+      renderCategoryList(lastCategories);
+      return;
+    }
+    const confirmArchiveEl = e.target.closest('[data-confirm-cat-archive]');
+    if (confirmArchiveEl) {
+      const result = await archiveCategory(Number(confirmArchiveEl.dataset.confirmCatArchive));
+      confirmingCategoryArchiveId = null;
+      if (!result.ok) {
+        categoryError = result.error;
+        renderCategoryList(lastCategories);
+        return;
+      }
+      categoryError = null;
+      refresh();
+    }
+  });
 
   document.getElementById('calPrev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); selectedCalDay = null; refreshCalendar(); });
   document.getElementById('calNext').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); selectedCalDay = null; refreshCalendar(); });
