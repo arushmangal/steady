@@ -290,7 +290,7 @@ async function handleApi(request, env, url) {
       return jsonResponse({ error: "failed to fetch Todoist projects" }, { status: 502 });
     }
     const { results } = await res.json();
-    return jsonResponse(results.map((p) => ({ id: p.id, name: p.name })));
+    return jsonResponse(results.map((p) => ({ id: p.id, name: p.name, parent_id: p.parent_id || null })));
   }
 
   // POST /api/topics/:id/review

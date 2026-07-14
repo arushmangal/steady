@@ -178,13 +178,21 @@
   select.project-picker {
     background: rgba(0,0,0,0.25);
     border: 1px solid var(--border);
-    color: var(--text-dim);
+    color: var(--text);
     padding: 10px 12px;
     border-radius: 8px;
     font-size: 13px;
     max-width: 160px;
   }
   select.project-picker:focus { outline: none; border-color: var(--accent-dim); }
+  /* The closed <select> box picks up the theme via the rules above, but the
+     native open-dropdown popup ignores inherited/background styling unless
+     option elements are styled directly — without this it renders with the
+     OS's default light popup regardless of the page's dark theme. */
+  select.project-picker option {
+    background: var(--panel);
+    color: var(--text);
+  }
   button {
     background: linear-gradient(135deg, var(--accent), #4f9d8f);
     color: #0d1410;
@@ -613,6 +621,36 @@
     return { byId, order };
   }
 
+  /**
+   * Same shape as buildCategoryTree, for Todoist's own project/sub-project
+   * tree (parent_id comes straight from Todoist's API). Reused by every
+   * picker that lists Todoist projects, so subprojects always render
+   * indented under their parent instead of in flat API order.
+   */
+  function buildProjectTree(projects) {
+    const byId = Object.fromEntries(projects.map((p) => [p.id, p]));
+    const childrenOf = {};
+    for (const p of projects) {
+      const key = p.parent_id ?? 'root';
+      (childrenOf[key] ||= []).push(p);
+    }
+    const order = [];
+    (function walk(parentKey, depth) {
+      for (const p of childrenOf[parentKey] || []) {
+        order.push({ id: p.id, project: p, depth });
+        walk(p.id, depth + 1);
+      }
+    })('root', 0);
+    return { byId, order };
+  }
+
+  function projectOptionsHtml(projects, selectedId) {
+    const { order } = buildProjectTree(projects);
+    return order
+      .map(({ project, depth }) => `<option value="${project.id}" ${String(project.id) === String(selectedId ?? '') ? 'selected' : ''}>${'  '.repeat(depth)}${escapeHtml(project.name)}</option>`)
+      .join('');
+  }
+
   async function addCategory(name, parentId, todoistProjectId) {
     if (!useLocal) {
       const result = await apiPost('/categories', 'POST', { name, parent_id: parentId || undefined, todoist_project_id: todoistProjectId || undefined });
@@ -827,7 +865,7 @@
           .map((o) => `<option value="${o.category.id}" ${o.category.id === category.parent_id ? 'selected' : ''}>${'  '.repeat(o.depth)}${escapeHtml(o.category.name)}</option>`)
           .join('');
         const projectOptions = todoistProjects
-          ? todoistProjects.map((p) => `<option value="${p.id}" ${p.id === category.todoist_project_id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
+          ? projectOptionsHtml(todoistProjects, category.todoist_project_id)
           : '';
         return `
           <div class="cat-edit-row" style="padding-left:${indent}px">
@@ -889,16 +927,13 @@
     todoistProjects = projects;
     projectsById = Object.fromEntries(projects.map((p) => [p.id, p.name]));
     const picker = document.getElementById('projectPicker');
-    picker.innerHTML = projects
-      .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
-      .join('');
-    const defaultIdx = projects.findIndex((p) => p.name === 'Steady');
+    picker.innerHTML = projectOptionsHtml(projects);
+    const { order } = buildProjectTree(projects);
+    const defaultIdx = order.findIndex(({ project }) => project.name === 'Steady');
     if (defaultIdx >= 0) picker.selectedIndex = defaultIdx;
     picker.style.display = '';
     const categoryTodoistPicker = document.getElementById('categoryTodoistPicker');
-    categoryTodoistPicker.innerHTML = '<option value="">No override</option>' + projects
-      .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
-      .join('');
+    categoryTodoistPicker.innerHTML = '<option value="">No override</option>' + projectOptionsHtml(projects);
     categoryTodoistPicker.style.display = '';
     refresh(); // re-render so any already-loaded topics/categories pick up project names
   })();
