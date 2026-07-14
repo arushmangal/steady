@@ -231,6 +231,17 @@
     font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1;
   }
   .archive-btn:hover { color: var(--danger); }
+  .archive-confirm-row { display: flex; align-items: center; gap: 6px; }
+  .archive-confirm {
+    background: linear-gradient(135deg, var(--danger), #a0503c);
+    color: #1a0f0d; border: none; padding: 5px 10px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .archive-cancel {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  }
+  .archive-cancel:hover { border-color: var(--accent-dim); color: var(--text); }
 
   .quality-row { display: none; gap: 6px; margin-top: 10px; }
   .quality-row.open { display: flex; }
@@ -518,7 +529,11 @@
       .join('');
   }
 
+  let lastTopics = [];
+  let confirmingArchiveId = null;
+
   function renderTopics(topics) {
+    lastTopics = topics;
     const list = document.getElementById('topicList');
     if (!topics.length) {
       list.innerHTML = '<div class="empty">No topics yet. Add something you studied today.</div>';
@@ -533,6 +548,12 @@
         const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
         const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
         if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
+        const archiveControl = confirmingArchiveId === t.id
+          ? `<div class="archive-confirm-row">
+               <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Delete?</button>
+               <button type="button" class="archive-cancel" data-cancel-archive="${t.id}">Cancel</button>
+             </div>`
+          : `<button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>`;
         return `
           <div class="topic ${statusClass}" data-id="${t.id}">
             <div style="flex:1">
@@ -545,7 +566,7 @@
             <div class="topic-right">
               ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
               <div class="topic-due ${overdue}" data-toggle="${t.id}" style="cursor:pointer">${dueLabel}</div>
-              <button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>
+              ${archiveControl}
             </div>
           </div>`;
       })
@@ -611,8 +632,21 @@
   document.getElementById('topicList').addEventListener('click', async (e) => {
     const archiveId = e.target.dataset.archive;
     if (archiveId) {
-      await archiveTopic(useLocal ? Number(archiveId) : archiveId);
+      confirmingArchiveId = Number(archiveId);
+      renderTopics(lastTopics);
+      return;
+    }
+    const confirmId = e.target.dataset.confirmArchive;
+    if (confirmId) {
+      await archiveTopic(useLocal ? Number(confirmId) : confirmId);
+      confirmingArchiveId = null;
       refresh();
+      return;
+    }
+    const cancelId = e.target.dataset.cancelArchive;
+    if (cancelId) {
+      confirmingArchiveId = null;
+      renderTopics(lastTopics);
       return;
     }
     const toggleId = e.target.dataset.toggle;
