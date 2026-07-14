@@ -3,9 +3,14 @@
  *
  * Routes:
  *   GET    /api/topics              list active topics, ordered by next_due
- *   POST   /api/topics              create a topic { title, notes? }
+ *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id? }
  *   POST   /api/topics/:id/review   record a review { quality: 0-5 } -> runs SM-2, returns updated topic
+ *   POST   /api/topics/:id/category reassign a topic's category { category_id }
  *   DELETE /api/topics/:id          archive a topic
+ *   GET    /api/categories          list active categories (flat; frontend builds the tree)
+ *   POST   /api/categories          create a category { name, parent_id?, todoist_project_id? }
+ *   POST   /api/categories/:id      update a category (rename / reparent / change Todoist override)
+ *   DELETE /api/categories/:id      archive a category (blocked if it has active children/topics)
  *   GET    /api/stats               28-day review counts, for the activity heatmap
  *   GET    /api/calendar            due-topic counts/titles by day, for a given month
  *   GET    /api/todoist/projects    list Todoist projects (for the destination picker)
@@ -29,6 +34,46 @@ function jsonResponse(data, init = {}) {
     headers: { "content-type": "application/json; charset=utf-8" },
     ...init,
   });
+}
+
+async function findActiveCategory(env, id) {
+  return env.DB.prepare(`SELECT * FROM categories WHERE id = ? AND archived = 0`).bind(id).first();
+}
+
+/**
+ * Validates an incoming category_id/parent_id from a request body.
+ * Returns { ok: true, id: number|null } or { ok: false, error }.
+ * Empty/null/undefined is valid and means "no category" — categorization
+ * is opt-in everywhere it's used.
+ */
+async function resolveValidCategoryId(env, rawId) {
+  if (rawId === undefined || rawId === null || rawId === "") return { ok: true, id: null };
+  const id = Number(rawId);
+  if (!Number.isInteger(id)) return { ok: false, error: "category_id must be an integer" };
+  const category = await findActiveCategory(env, id);
+  if (!category) return { ok: false, error: "category not found" };
+  return { ok: true, id };
+}
+
+/**
+ * True if setting `categoryId`'s parent to `proposedParentId` would create a
+ * cycle. Foreign keys check existence, not acyclicity, so this guard is
+ * required regardless of D1's FK enforcement. The `seen` set both detects
+ * the target cycle and guarantees termination even against a pre-existing
+ * corrupt one.
+ */
+async function wouldCreateCycle(env, categoryId, proposedParentId) {
+  let current = proposedParentId;
+  const seen = new Set();
+  while (current !== null && current !== undefined) {
+    if (current === categoryId) return true;
+    if (seen.has(current)) return false; // pre-existing cycle elsewhere; not this call's problem
+    seen.add(current);
+    const row = await env.DB.prepare(`SELECT parent_id FROM categories WHERE id = ?`).bind(current).first();
+    if (!row) return false;
+    current = row.parent_id;
+  }
+  return false;
 }
 
 /**
@@ -105,16 +150,126 @@ async function handleApi(request, env, url) {
     if (!body.title || typeof body.title !== "string") {
       return jsonResponse({ error: "title is required" }, { status: 400 });
     }
+    const category = await resolveValidCategoryId(env, body.category_id);
+    if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
+
     const due = todayISO();
     const { meta } = await env.DB.prepare(
-      `INSERT INTO topics (title, notes, next_due, todoist_project_id) VALUES (?, ?, ?, ?)`
+      `INSERT INTO topics (title, notes, next_due, todoist_project_id, category_id) VALUES (?, ?, ?, ?, ?)`
     )
-      .bind(body.title, body.notes ?? null, due, body.todoist_project_id ?? null)
+      .bind(body.title, body.notes ?? null, due, body.todoist_project_id ?? null, category.id)
       .run();
     const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`)
       .bind(meta.last_row_id)
       .first();
     return jsonResponse(topic, { status: 201 });
+  }
+
+  // POST /api/topics/:id/category — reassign a topic's category. Deliberately
+  // narrow (not a general topic-edit route) — richer topic editing is still
+  // an open question (see CLAUDE.md), this doesn't answer it.
+  if (method === "POST" && parts.length === 4 && parts[1] === "topics" && parts[3] === "category") {
+    const id = Number(parts[2]);
+    const topic = await env.DB.prepare(`SELECT id FROM topics WHERE id = ?`).bind(id).first();
+    if (!topic) return jsonResponse({ error: "not found" }, { status: 404 });
+
+    const body = await request.json();
+    const category = await resolveValidCategoryId(env, body.category_id);
+    if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
+
+    await env.DB.prepare(`UPDATE topics SET category_id = ? WHERE id = ?`).bind(category.id, id).run();
+    const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+    return jsonResponse(updated);
+  }
+
+  // GET /api/categories — flat list; frontend builds the tree client-side.
+  if (method === "GET" && parts.length === 2 && parts[1] === "categories") {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM categories WHERE archived = 0 ORDER BY id ASC`
+    ).all();
+    return jsonResponse(results);
+  }
+
+  // POST /api/categories — create { name, parent_id?, todoist_project_id? }
+  if (method === "POST" && parts.length === 2 && parts[1] === "categories") {
+    const body = await request.json();
+    if (!body.name || typeof body.name !== "string") {
+      return jsonResponse({ error: "name is required" }, { status: 400 });
+    }
+    const parent = await resolveValidCategoryId(env, body.parent_id);
+    if (!parent.ok) return jsonResponse({ error: parent.error }, { status: 400 });
+
+    const { meta } = await env.DB.prepare(
+      `INSERT INTO categories (name, parent_id, todoist_project_id) VALUES (?, ?, ?)`
+    )
+      .bind(body.name, parent.id, body.todoist_project_id ?? null)
+      .run();
+    const category = await env.DB.prepare(`SELECT * FROM categories WHERE id = ?`)
+      .bind(meta.last_row_id)
+      .first();
+    return jsonResponse(category, { status: 201 });
+  }
+
+  // POST /api/categories/:id — update (rename / reparent / change Todoist
+  // override). One combined route + always-full UPDATE (fetch, merge in JS,
+  // write every column) — this file avoids dynamic SQL construction
+  // elsewhere (see the review route), so this stays consistent with that.
+  if (method === "POST" && parts.length === 3 && parts[1] === "categories") {
+    const id = Number(parts[2]);
+    const existing = await findActiveCategory(env, id);
+    if (!existing) return jsonResponse({ error: "not found" }, { status: 404 });
+
+    const body = await request.json();
+    const name = body.name !== undefined ? body.name : existing.name;
+    if (!name || typeof name !== "string") {
+      return jsonResponse({ error: "name is required" }, { status: 400 });
+    }
+
+    let parentId = existing.parent_id;
+    if (body.parent_id !== undefined) {
+      const parent = await resolveValidCategoryId(env, body.parent_id);
+      if (!parent.ok) return jsonResponse({ error: parent.error }, { status: 400 });
+      if (parent.id !== null && (parent.id === id || (await wouldCreateCycle(env, id, parent.id)))) {
+        return jsonResponse({ error: "that would create a cycle (a category cannot be its own ancestor)" }, { status: 400 });
+      }
+      parentId = parent.id;
+    }
+
+    const todoistProjectId = body.todoist_project_id !== undefined ? body.todoist_project_id : existing.todoist_project_id;
+
+    await env.DB.prepare(
+      `UPDATE categories SET name = ?, parent_id = ?, todoist_project_id = ? WHERE id = ?`
+    )
+      .bind(name, parentId, todoistProjectId, id)
+      .run();
+    const updated = await env.DB.prepare(`SELECT * FROM categories WHERE id = ?`).bind(id).first();
+    return jsonResponse(updated);
+  }
+
+  // DELETE /api/categories/:id — safe archive: blocked (400) if active
+  // subcategories or active topics still reference it, so nothing gets
+  // silently orphaned. Never cascades.
+  if (method === "DELETE" && parts.length === 3 && parts[1] === "categories") {
+    const id = Number(parts[2]);
+    const childCount = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM categories WHERE parent_id = ? AND archived = 0`
+    ).bind(id).first();
+    const topicCount = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM topics WHERE category_id = ? AND archived = 0`
+    ).bind(id).first();
+
+    if (childCount.n > 0 || topicCount.n > 0) {
+      const reasons = [];
+      if (childCount.n > 0) reasons.push(`${childCount.n} active subcategor${childCount.n === 1 ? "y" : "ies"}`);
+      if (topicCount.n > 0) reasons.push(`${topicCount.n} active topic${topicCount.n === 1 ? "" : "s"}`);
+      return jsonResponse(
+        { error: `Cannot archive: ${reasons.join(" and ")} still reference this category. Reassign or archive them first.` },
+        { status: 400 }
+      );
+    }
+
+    await env.DB.prepare(`UPDATE categories SET archived = 1 WHERE id = ?`).bind(id).run();
+    return jsonResponse({ ok: true });
   }
 
   // GET /api/todoist/projects — proxies Todoist's project list so the
@@ -228,6 +383,32 @@ async function handleApi(request, env, url) {
  * Creates the Todoist task for a due topic, if one doesn't already exist.
  * Requires env.TODOIST_API_TOKEN (secret) and env.TODOIST_PROJECT_ID (var).
  */
+/**
+ * Resolves which Todoist project a topic's revision task should land in:
+ * the topic's own override -> its category's override -> the nearest
+ * ancestor category's override -> the global default. A JS loop rather
+ * than a recursive SQL CTE — this runs once per due topic once per day
+ * inside the cron, against a tree at most a few levels deep, and a plain
+ * loop is far easier to verify by inspection than CTE semantics (same
+ * "boring beats clever" call made for the SM-2 math and the auth compare).
+ */
+async function resolveTodoistProjectId(env, topic) {
+  if (topic.todoist_project_id) return topic.todoist_project_id;
+
+  let categoryId = topic.category_id;
+  const seen = new Set();
+  while (categoryId && !seen.has(categoryId)) {
+    seen.add(categoryId);
+    const category = await env.DB.prepare(
+      `SELECT todoist_project_id, parent_id FROM categories WHERE id = ?`
+    ).bind(categoryId).first();
+    if (!category) break; // dangling reference — fall through to the default
+    if (category.todoist_project_id) return category.todoist_project_id;
+    categoryId = category.parent_id;
+  }
+  return env.TODOIST_PROJECT_ID;
+}
+
 async function pushToTodoist(env, topic) {
   if (topic.todoist_task_id) {
     // Already pushed. Steady doesn't try to re-sync completion state here —
@@ -235,6 +416,7 @@ async function pushToTodoist(env, topic) {
     return;
   }
 
+  const projectId = await resolveTodoistProjectId(env, topic);
   const res = await fetch("https://api.todoist.com/rest/v2/tasks", {
     method: "POST",
     headers: {
@@ -243,7 +425,7 @@ async function pushToTodoist(env, topic) {
     },
     body: JSON.stringify({
       content: `Review: ${topic.title}`,
-      project_id: topic.todoist_project_id || env.TODOIST_PROJECT_ID,
+      project_id: projectId,
       labels: [env.REVISION_LABEL || "revision"],
       due_string: "today",
     }),

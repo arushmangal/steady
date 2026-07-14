@@ -8,12 +8,16 @@ due-today revisions into Todoist so you actually get notified.
 
 - **Cloudflare Workers** — single Worker serves both the API (`/api/*`) and
   the static frontend (everything else, from `/public`)
-- **Cloudflare D1** — SQLite database, two tables: `topics` and `reviews`
+- **Cloudflare D1** — SQLite database, three tables: `topics`, `reviews`,
+  and `categories` (an optional, arbitrary-depth tree topics can belong to)
 - **Todoist REST API v2** — daily cron (23:30 UTC / 5:00 AM IST) pushes
   topics due today or overdue into Todoist as tasks. Each topic can target
   its own Todoist project (picked from a dropdown in the UI, backed by
-  `GET /api/todoist/projects`); topics without an override fall back to the
-  default `TODOIST_PROJECT_ID` project ("Steady")
+  `GET /api/todoist/projects`); failing that, its category's own override,
+  then the nearest ancestor category's override, then the default
+  `TODOIST_PROJECT_ID` project
+- A forward-looking, clickable calendar (review directly from a due day)
+  and a 28-day activity heatmap, alongside the flat/grouped topic list
 - No build step, no frontend framework — `public/index.html` is plain
   HTML/CSS/JS and also works standalone via `localStorage` if the API isn't
   reachable
@@ -51,6 +55,13 @@ Paste the returned `database_id` into `wrangler.toml`.
 ```
 wrangler d1 execute steady --remote --file=./schema.sql
 ```
+
+There's no migrations mechanism here — `schema.sql` only ever runs as
+`CREATE TABLE/INDEX IF NOT EXISTS`, so it won't retrofit a column onto a
+table that already exists. If a future change adds a column to an existing
+table (like `topics.category_id` did), that needs a one-off manual
+`ALTER TABLE`, documented in `CLAUDE.md` at the time it happens — check
+there before assuming re-running `schema.sql` alone is enough.
 
 **3. Set your Todoist project**
 
