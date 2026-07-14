@@ -24,12 +24,25 @@ the fix, since they already live in it daily).
   App / Pages project to configure, still one `wrangler deploy` away from
   live. Pages + git auto-deploy is a valid follow-up, not a correction of a
   mistake.
-- **Todoist REST API v2**, called directly from the Worker's `scheduled`
-  handler (daily cron), not through a middleman. The Worker needs its own
-  `TODOIST_API_TOKEN` secret, set via `wrangler secret put TODOIST_API_TOKEN`
-  — an AI agent should never handle or type a live API token (or any other
-  credential/secret) on someone's behalf, so don't offer to do this part for
-  the user even if asked. Same principle applies to Basic Auth credentials
+- **Todoist API** (`https://api.todoist.com/api/v1/`), called directly from
+  the Worker's `scheduled` handler (daily cron), not through a middleman.
+  **This was `/rest/v2/` until 2026-07-14** — Todoist fully decommissioned
+  REST v2 (confirmed: it now returns `410 Gone`), which meant the entire
+  Todoist integration had been silently broken from the moment
+  `TODOIST_API_TOKEN` was first set, since `pushToTodoist` swallows failures
+  into a `console.error` rather than surfacing them. Found by actually
+  triggering a real push against the real API with the real token — this is
+  exactly the kind of failure that stays invisible until someone tests the
+  real thing, not just the code around it. The migration also **silently
+  changed the projects-list response shape** from a bare array to
+  `{ results: [...] }` (pagination wrapper) — task creation's response was
+  *not* similarly wrapped, so don't assume every endpoint moved the same
+  way if this needs touching again; verify each shape directly.
+  The Worker needs its own `TODOIST_API_TOKEN` secret, set via
+  `wrangler secret put TODOIST_API_TOKEN` — an AI agent should never handle
+  or type a live API token (or any other credential/secret) on someone's
+  behalf, so don't offer to do this part for the user even if asked. Same
+  principle applies to Basic Auth credentials
   (see below): generate/suggest values if helpful, but the user runs
   `wrangler secret put` themselves.
 
