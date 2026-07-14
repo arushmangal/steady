@@ -5,45 +5,64 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Steady</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Fraunces:opsz,wght@9..144,500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #111110;
-    --panel: #171716;
-    --border: #2a2a28;
-    --text: #ece9e4;
-    --text-dim: #9a968f;
-    --accent: #7eb89a;
-    --accent-dim: #4f7d68;
-    --danger: #c97b6b;
+    --bg: #150f04;
+    --panel: #20160a;
+    --border: #41300f;
+    --text: #f5ecd8;
+    --text-dim: #a8935f;
+    --accent: #f0b429;
+    --accent-dim: #8a6a2a;
+    --accent2: #c98a2e;
+    --danger: #e8623f;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background:
-      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(126,184,154,0.08), transparent 60%),
-      radial-gradient(ellipse 700px 500px at 100% 10%, rgba(216,185,120,0.05), transparent 60%),
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(240,180,41,0.07), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 10%, rgba(201,138,46,0.05), transparent 60%),
       var(--bg);
     color: var(--text);
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: 'Manrope', system-ui, sans-serif;
     min-height: 100vh;
   }
   .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
   h1 {
-    font-family: 'DM Serif Display', serif;
-    font-weight: 400;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
     font-size: 40px;
     margin: 0 0 4px;
     display: inline-block;
-    background-image: linear-gradient(100deg, var(--text) 30%, var(--accent) 75%, #d8b978);
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
+    color: var(--text);
+    text-shadow: 0 0 18px rgba(240,180,41,0.45), 0 0 40px rgba(240,180,41,0.15);
   }
+  .wordmark-cursor {
+    display: inline-block;
+    width: 9px;
+    height: 0.62em;
+    margin-left: 5px;
+    vertical-align: -0.06em;
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(240,180,41,0.7);
+    animation: cursor-blink 1.1s steps(1) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) { .wordmark-cursor { animation: none; } }
+  @keyframes cursor-blink { 50% { opacity: 0; } }
   .tagline { color: var(--text-dim); margin: 0 0 32px; font-size: 14px; }
+  .scrawl {
+    font-family: 'Caveat', cursive;
+    color: var(--accent2);
+    font-size: 19px;
+    margin-top: 14px;
+    transform: rotate(-2deg);
+    display: block;
+  }
 
   .panel {
-    background: linear-gradient(160deg, #1b1b19 0%, var(--panel) 45%, #141413 100%);
+    background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 20px;
@@ -51,7 +70,6 @@
   }
 
   /* Heatmap: 28 days of review activity, GitHub-style intensity grid */
-  .heatmap-panel { background: linear-gradient(135deg, #172a30 0%, #1a2035 55%, #111110 100%); border-color: #2d3a3f; }
   .heatmap { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; }
   .heat-cell {
     aspect-ratio: 1;
@@ -61,26 +79,22 @@
     transition: transform 0.15s, box-shadow 0.15s;
   }
   .heat-cell:hover { transform: scale(1.15); }
-  .heat-cell.heat-1 { background: linear-gradient(160deg, rgba(126,184,154,0.35), rgba(45,110,120,0.25)); border-color: transparent; }
-  .heat-cell.heat-2 { background: linear-gradient(160deg, rgba(126,184,154,0.65), rgba(45,110,120,0.5)); border-color: transparent; }
+  .heat-cell.heat-1 { background: #2c2210; border-color: transparent; }
+  .heat-cell.heat-2 { background: #a87a1e; border-color: transparent; }
   .heat-cell.heat-3 {
-    background: linear-gradient(160deg, #d8b978, #7eb89a);
+    background: var(--accent);
     border-color: transparent;
-    box-shadow: 0 0 10px rgba(216,185,120,0.4);
+    box-shadow: 0 0 10px rgba(240,180,41,0.5);
   }
   .heatmap-label { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; justify-content: space-between; }
 
   /* Calendar: forward-looking due dates */
-  .panel.cal-panel {
-    background: linear-gradient(135deg, #17302b 0%, #241a2e 55%, #111110 100%);
-    border-color: #33302f;
-  }
   .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
   .cal-title {
-    font-family: 'DM Serif Display', serif;
+    font-family: 'Fraunces', serif;
     font-size: 18px;
     padding-bottom: 4px;
-    background-image: linear-gradient(90deg, var(--accent), #d8b978);
+    background-image: linear-gradient(90deg, var(--accent), var(--accent2));
     background-size: 100% 2px;
     background-repeat: no-repeat;
     background-position: 0 100%;
@@ -117,28 +131,28 @@
     animation: cal-pulse 2.4s ease-in-out infinite;
   }
   @keyframes cal-pulse {
-    0%, 100% { box-shadow: 0 0 0 3px rgba(126,184,154,0.12); }
-    50% { box-shadow: 0 0 0 5px rgba(126,184,154,0.22); }
+    0%, 100% { box-shadow: 0 0 0 3px rgba(240,180,41,0.14); }
+    50% { box-shadow: 0 0 0 5px rgba(240,180,41,0.28); }
   }
-  .cal-day.due-1 { background: linear-gradient(160deg, rgba(126,184,154,0.28), rgba(79,125,104,0.22)); color: var(--text); }
+  .cal-day.due-1 { background: rgba(240,180,41,0.16); color: var(--text); }
   .cal-day.due-2 {
-    background: linear-gradient(160deg, rgba(126,184,154,0.5), rgba(45,110,120,0.4));
+    background: rgba(240,180,41,0.32);
     color: var(--text); border-color: var(--accent-dim);
   }
   .cal-day.due-3 {
-    background: linear-gradient(160deg, #7eb89a, #2d6e78);
-    color: #0d1410; font-weight: 600; border-color: var(--accent);
-    box-shadow: 0 0 14px rgba(126,184,154,0.35);
+    background: var(--accent);
+    color: #201400; font-weight: 600; border-color: var(--accent);
+    box-shadow: 0 0 14px rgba(240,180,41,0.5);
   }
-  .cal-day.overdue-1 { background: linear-gradient(160deg, rgba(201,123,107,0.3), rgba(160,80,60,0.22)); color: var(--text); }
+  .cal-day.overdue-1 { background: rgba(232,98,63,0.18); color: var(--text); }
   .cal-day.overdue-2 {
-    background: linear-gradient(160deg, rgba(201,123,107,0.55), rgba(180,90,40,0.4));
+    background: rgba(232,98,63,0.38);
     color: var(--text); border-color: var(--danger);
   }
   .cal-day.overdue-3 {
-    background: linear-gradient(160deg, #e0947f, #b5502f);
-    color: #1a0f0d; font-weight: 600; border-color: var(--danger);
-    box-shadow: 0 0 14px rgba(201,123,107,0.4);
+    background: var(--danger);
+    color: #210a04; font-weight: 600; border-color: var(--danger);
+    box-shadow: 0 0 14px rgba(232,98,63,0.5);
   }
   .cal-day.has-due { cursor: pointer; }
   .cal-day.has-due:hover { transform: scale(1.07); box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
@@ -163,7 +177,6 @@
   .cal-detail-topic + .cal-detail-topic { border-top: 1px solid rgba(255,255,255,0.06); }
   .cal-detail-quality { display: flex; gap: 4px; }
 
-  .panel.add-panel { background: linear-gradient(160deg, #241c17 0%, var(--panel) 45%, #141413 100%); border-color: #3a2f24; }
   form.add-topic { display: flex; gap: 8px; flex-wrap: wrap; }
   input[type="text"] {
     flex: 1;
@@ -194,8 +207,8 @@
     color: var(--text);
   }
   button {
-    background: linear-gradient(135deg, var(--accent), #4f9d8f);
-    color: #0d1410;
+    background: var(--accent);
+    color: #201400;
     border: none;
     padding: 10px 18px;
     border-radius: 8px;
@@ -204,7 +217,7 @@
     cursor: pointer;
     transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
   }
-  button:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(126,184,154,0.3); }
+  button:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(240,180,41,0.35); }
   button.ghost {
     background: transparent;
     border: 1px solid var(--border);
@@ -213,25 +226,35 @@
   }
   button.ghost:hover { border-color: var(--accent-dim); color: var(--text); transform: none; box-shadow: none; filter: none; }
 
+  .topics-wrap { margin-bottom: 20px; }
   .topic {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 12px 14px 14px;
-    border-bottom: 1px solid var(--border);
-    border-left: 3px solid var(--border);
-    border-radius: 0 8px 8px 0;
-    margin-bottom: 2px;
-    transition: background 0.15s, border-color 0.15s;
+    padding: 14px 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .topic:hover { background: rgba(255,255,255,0.02); }
-  .topic.status-overdue { border-left-color: var(--danger); }
-  .topic.status-today { border-left-color: var(--accent); }
-  .topic:last-child { border-bottom: none; }
+  .topic:hover { border-color: var(--accent-dim); }
+  .topic:last-child { margin-bottom: 0; }
+  .topic.status-overdue { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), 0 0 20px rgba(232,98,63,0.28); }
+  .topic.status-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 20px rgba(240,180,41,0.28); }
   .topic-title { font-size: 15px; }
   .topic-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
-  .topic-due { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: rgba(126,184,154,0.15); color: var(--accent); }
-  .topic-due.overdue { background: rgba(201,123,107,0.15); color: var(--danger); }
+  .topic-due {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .topic-due.due-today { color: var(--accent); font-weight: 600; }
+  .topic-due.overdue {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 50%; font-size: 11px;
+    border: 1.5px solid var(--danger); color: var(--danger);
+    box-shadow: 0 0 10px rgba(232,98,63,0.5);
+  }
   .topic-right { display: flex; align-items: center; gap: 10px; }
   .pushed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
   .archive-btn {
@@ -241,8 +264,8 @@
   .archive-btn:hover { color: var(--danger); }
   .archive-confirm-row { display: flex; align-items: center; gap: 6px; }
   .archive-confirm {
-    background: linear-gradient(135deg, var(--danger), #a0503c);
-    color: #1a0f0d; border: none; padding: 5px 10px; border-radius: 6px;
+    background: var(--danger);
+    color: #210a04; border: none; padding: 5px 10px; border-radius: 6px;
     font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
   }
   .archive-cancel {
@@ -254,16 +277,14 @@
   .quality-row { display: none; gap: 6px; margin-top: 10px; }
   .quality-row.open { display: flex; }
   .qbtn {
-    width: 30px; height: 30px; border-radius: 6px; font-size: 12px; font-weight: 600;
-    border: 1px solid transparent; color: var(--text);
-    transition: transform 0.15s, filter 0.15s;
+    width: 30px; height: 30px; border-radius: 50%; font-size: 12px; font-weight: 600;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text-dim);
+    transition: transform 0.15s, filter 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
   }
-  .qbtn:hover { transform: translateY(-2px); filter: brightness(1.15); }
-  .qbtn[data-q="0"], .qbtn[data-q="1"] { background: linear-gradient(160deg, rgba(201,123,107,0.5), rgba(160,80,60,0.35)); }
-  .qbtn[data-q="2"] { background: linear-gradient(160deg, rgba(216,166,120,0.5), rgba(170,110,50,0.35)); }
-  .qbtn[data-q="3"] { background: linear-gradient(160deg, rgba(216,185,120,0.5), rgba(126,184,154,0.3)); }
-  .qbtn[data-q="4"] { background: linear-gradient(160deg, rgba(126,184,154,0.65), rgba(45,110,120,0.45)); }
-  .qbtn[data-q="5"] { background: linear-gradient(160deg, #7eb89a, #2d6e78); box-shadow: 0 0 8px rgba(126,184,154,0.35); }
+  .qbtn:hover, .qbtn:focus-visible {
+    transform: translateY(-2px); background: var(--accent); color: #201400;
+    border-color: var(--accent); box-shadow: 0 0 14px rgba(240,180,41,0.55); outline: none;
+  }
 
   .empty { color: var(--text-dim); font-size: 14px; padding: 24px 0; text-align: center; }
 
@@ -294,12 +315,13 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Steady</h1>
+  <h1>Steady<span class="wordmark-cursor" aria-hidden="true"></span></h1>
   <p class="tagline">Log what you studied. Steady tells you when to look at it again.</p>
 
   <div class="panel heatmap-panel">
     <div class="heatmap" id="heatmap"></div>
     <div class="heatmap-label"><span>28 days ago</span><span>today</span></div>
+    <div class="scrawl" id="dailyQuote"></div>
   </div>
 
   <div class="panel cal-panel">
@@ -335,7 +357,7 @@
     </div>
   </details>
 
-  <div class="panel">
+  <div class="topics-wrap">
     <div id="topicList"></div>
   </div>
 </div>
@@ -366,6 +388,57 @@
   }
   function todayISO() {
     return nowIST().toISOString().slice(0, 10);
+  }
+
+  // "+4d" / "−3d" — both nextDue and today are date-only ISO strings, which
+  // every JS engine parses as UTC midnight per spec, so this diff is exact
+  // regardless of the IST offset used to compute `today` upstream.
+  function dueDelta(nextDue, today) {
+    const days = Math.round((Date.parse(nextDue) - Date.parse(today)) / 86400000);
+    return days > 0 ? `+${days}d` : `−${Math.abs(days)}d`;
+  }
+
+  // Rotating line about the nature of revision itself — never addressed at
+  // the user directly, never "don't break it" framing. Picked deterministically
+  // from today's date so it's stable all day and changes tomorrow, not on
+  // every reload.
+  const REVISION_QUOTES = [
+    "What resurfaces was never really gone.",
+    "Recall is a muscle; forgetting is just its untrained state.",
+    "Every review is a small vote for what a mind keeps.",
+    "Memory rewards the return, not the first visit.",
+    "The interval is the point — not the cramming, the coming back.",
+    "Nothing sticks on the first pass. That's the method, not a failure.",
+    "Spaced repetition works because forgetting is scheduled too.",
+    "A fact revisited late is worth more than one revisited early.",
+    "The gap between reviews does as much work as the review itself.",
+    "Understanding fades on a curve; revision resets the curve, not the clock.",
+    "Retrieval, not re-reading, carries a fact forward.",
+    "Today's review is yesterday's memory, tested.",
+    "The point of returning isn't repetition — it's proof.",
+    "Forgetting has a schedule. So does coming back.",
+    "A memory tested is a memory kept.",
+    "The struggle to recall is where the strengthening happens.",
+    "Easy review, weak trace. Hard review, deep root.",
+    "What's due today was decided by how it went last time.",
+    "Consistency compounds; a single long session doesn't.",
+    "The curve doesn't care about good intentions, only intervals.",
+    "Reviewing on time is cheaper than relearning from scratch.",
+    "Each pass makes the next gap wider — that's the whole design.",
+    "A skipped review doesn't vanish. It just gets harder.",
+    "What's rehearsed under difficulty is what survives.",
+    "The schedule remembers what the mind hasn't yet.",
+    "Knowledge decays quietly until it's asked a question.",
+    "Small, spaced effort outlasts one large one.",
+    "The value of a review is set before it starts, by the wait.",
+    "Recognition is cheap. Recall is what counts.",
+    "A streak isn't the goal — the retention under it is.",
+  ];
+  function dailyQuote() {
+    const seed = todayISO();
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+    return REVISION_QUOTES[Math.abs(hash) % REVISION_QUOTES.length];
   }
 
   function sm2(prev, quality, elapsedDays) {
@@ -741,9 +814,11 @@
   let confirmingArchiveId = null;
 
   function renderTopicRow(t, today) {
-    const overdue = t.next_due < today ? 'overdue' : '';
-    const dueLabel = t.next_due === today ? 'due today' : t.next_due < today ? 'overdue' : `due ${t.next_due}`;
-    const statusClass = t.next_due < today ? 'status-overdue' : t.next_due === today ? 'status-today' : '';
+    const overdue = t.next_due < today;
+    const isToday = t.next_due === today;
+    const dueLabel = isToday ? 'today' : dueDelta(t.next_due, today);
+    const dueClass = overdue ? 'overdue' : isToday ? 'due-today' : '';
+    const statusClass = overdue ? 'status-overdue' : isToday ? 'status-today' : '';
     const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
     const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
     if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
@@ -764,7 +839,7 @@
         </div>
         <div class="topic-right">
           ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
-          <div class="topic-due ${overdue}" data-toggle="${t.id}" style="cursor:pointer">${dueLabel}</div>
+          <div class="topic-due ${dueClass}" data-toggle="${t.id}" style="cursor:pointer" title="due ${t.next_due}">${dueLabel}</div>
           ${archiveControl}
         </div>
       </div>`;
@@ -908,6 +983,8 @@
     renderCategoryManager(categories);
     refreshCalendar();
   }
+
+  document.getElementById('dailyQuote').textContent = dailyQuote();
 
   document.getElementById('addForm').addEventListener('submit', async (e) => {
     e.preventDefault();
