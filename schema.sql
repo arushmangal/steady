@@ -49,3 +49,17 @@ CREATE INDEX IF NOT EXISTS idx_topics_category_id ON topics(category_id);
 CREATE INDEX IF NOT EXISTS idx_categories_parent_id ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_topic_id ON reviews(topic_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON reviews(reviewed_at);
+
+-- One row per cron-driven Todoist operation per run, so a silent failure
+-- (like the REST v2 decommission this project already hit once) shows up
+-- in the UI instead of only in a console.error nobody's watching.
+CREATE TABLE IF NOT EXISTS sync_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  operation  TEXT NOT NULL,              -- 'push' | 'import' | 'completion_sync'
+  ok         INTEGER NOT NULL,           -- did the operation run without throwing
+  succeeded  INTEGER NOT NULL DEFAULT 0, -- per-item success count within the run
+  failed     INTEGER NOT NULL DEFAULT 0,
+  detail     TEXT                        -- last error message, if any
+);
+CREATE INDEX IF NOT EXISTS idx_sync_log_operation_id ON sync_log(operation, id);

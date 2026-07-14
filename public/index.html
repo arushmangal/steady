@@ -87,6 +87,7 @@
     box-shadow: 0 0 10px rgba(240,180,41,0.5);
   }
   .heatmap-label { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; justify-content: space-between; }
+  .sync-status { color: var(--text-dim); font-size: 11px; margin-top: 10px; }
 
   /* Calendar: forward-looking due dates */
   .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
@@ -322,6 +323,7 @@
     <div class="heatmap" id="heatmap"></div>
     <div class="heatmap-label"><span>28 days ago</span><span>today</span></div>
     <div class="scrawl" id="dailyQuote"></div>
+    <div class="sync-status" id="syncStatus"></div>
   </div>
 
   <div class="panel cal-panel">
@@ -623,6 +625,37 @@
     } catch (e) {
       return null;
     }
+  }
+
+  // Best-effort only, same as loadTodoistProjects — a missing/unreachable
+  // sync-status endpoint just means the status line doesn't render.
+  async function loadSyncStatus() {
+    try {
+      const res = await fetch(API + '/sync-status');
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderSyncStatus(status) {
+    const el = document.getElementById('syncStatus');
+    if (!status) { el.innerHTML = ''; return; }
+    const push = status.push;
+    if (!push) { el.innerHTML = ''; return; }
+    const warn = !push.ok || push.stale || push.failed > 0;
+    const timeAgo = (() => {
+      const ms = Date.now() - Date.parse(push.run_at.replace(' ', 'T') + 'Z');
+      const hours = Math.round(ms / 3600000);
+      if (hours < 1) return 'just now';
+      if (hours < 24) return `${hours}h ago`;
+      return `${Math.round(hours / 24)}d ago`;
+    })();
+    const label = !push.ok
+      ? `Last sync failed · ${timeAgo}`
+      : `Last sync: ${push.succeeded} pushed${push.failed ? `, ${push.failed} failed` : ''} · ${timeAgo}`;
+    el.innerHTML = `<span style="${warn ? 'color:var(--danger)' : ''}">${escapeHtml(label)}</span>`;
   }
 
   async function addTopic(title, todoistProjectId, categoryId) {
@@ -985,6 +1018,7 @@
   }
 
   document.getElementById('dailyQuote').textContent = dailyQuote();
+  loadSyncStatus().then(renderSyncStatus);
 
   document.getElementById('addForm').addEventListener('submit', async (e) => {
     e.preventDefault();
