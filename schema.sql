@@ -41,7 +41,15 @@ CREATE TABLE IF NOT EXISTS reviews (
   ef_before       REAL NOT NULL,
   ef_after        REAL NOT NULL,
   interval_before INTEGER NOT NULL,
-  interval_after  INTEGER NOT NULL
+  interval_after  INTEGER NOT NULL,
+
+  -- Undo support (nullable — rows recorded before this feature existed have
+  -- these as NULL, which is how the undo route tells "too old to undo"
+  -- apart from a topic's legitimate first-ever review, where
+  -- last_reviewed_before is also NULL but for a real reason)
+  repetitions_before   INTEGER,
+  next_due_before      TEXT,
+  last_reviewed_before TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_topics_next_due ON topics(next_due);

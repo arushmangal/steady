@@ -78,9 +78,16 @@ a real Todoist project (not just a first draft anymore).
   Basic Auth gate (`checkAuth`, constant-time comparison via HMAC) in front
   of every route. The auth gate is inert until
   `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` secrets are set.
-- `schema.sql` — three tables: `topics` (includes `todoist_project_id` for
-  per-topic Todoist destination overrides, and `category_id`), `reviews`,
-  and `categories` (self-referential `parent_id`, arbitrary depth).
+- `schema.sql` — four tables: `topics` (includes `todoist_project_id` for
+  per-topic Todoist destination overrides, and `category_id`), `reviews`
+  (also carries `repetitions_before`/`next_due_before`/`last_reviewed_before`,
+  nullable — a full pre-review snapshot that makes `POST
+  /api/topics/:id/undo-review` a mechanical restore-and-delete rather than
+  a recomputation; `NULL` on a row means "recorded before undo support
+  existed," which the undo route uses to 400 cleanly on old reviews rather
+  than guessing), `categories` (self-referential `parent_id`, arbitrary
+  depth), and `sync_log` (one row per cron-driven Todoist operation per
+  run — see the health-check note above).
 - `public/index.html` — single-file frontend (vanilla JS, no build step).
   **"Gold Leaf" aesthetic** (as of 2026-07-14, replacing an earlier
   sage-green/gold/`DM Serif Display` theme that the user found generic
