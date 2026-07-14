@@ -65,24 +65,45 @@ a real Todoist project (not just a first draft anymore).
   per-topic Todoist destination overrides, and `category_id`), `reviews`,
   and `categories` (self-referential `parent_id`, arbitrary depth).
 - `public/index.html` — single-file frontend (vanilla JS, no build step).
-  Near-black background (`#111110`) with a subtle radial-gradient vignette,
-  sage green accent (`#7eb89a`), `DM Serif Display` for the wordmark
-  (gradient text treatment), a 28-day activity **heatmap** (color-intensity
-  tiles, GitHub-contribution-graph style — replaced the original bar-chart
-  "pulse"), a **clickable** forward-looking calendar panel (gradient
-  backdrop, tiered color-pop fills by due-count, glowing "today" ring;
-  clicking a due day opens an inline detail panel listing what's due, with
-  quality-rating buttons to review directly from the calendar for
-  today/overdue days), a Todoist project picker and category picker in the
-  add-topic form, a collapsed-by-default category manager panel, a topic
-  list grouped by category when any category exists (exact flat list
-  otherwise — zero visible change for anyone who hasn't used the feature),
-  an archive button and color-coded left-border accent per topic (by
-  overdue/due-today/upcoming status), and a "pushed to Todoist" indicator
-  dot. Every panel deliberately has real visual identity (gradients, glow,
-  hover motion) rather than the flat/muted look the app started with — this
-  was an explicit, repeated correction from the user, not a style nit.
-  Works standalone via `localStorage` if `/api/*` calls fail.
+  **"Gold Leaf" aesthetic** (as of 2026-07-14, replacing an earlier
+  sage-green/gold/`DM Serif Display` theme that the user found generic
+  despite being vibrant — see [[feedback-aesthetic-not-bleak]] for why
+  "vibrant" alone wasn't the fix): warm near-black background (`#150f04`),
+  a rich saturated gold accent (`#f0b429`), `Fraunces` for the wordmark
+  (soft, glowing, not gradient-clipped), `Manrope` for body text. The
+  governing rule is **glow is earned, not blanket** — panels are flat
+  (`var(--panel)`, no per-panel gradients), and emphasis is spent only on
+  what's actually due: a topic due **today** gets a whole-row gold glow: a
+  topic that's **overdue** gets a whole-row glow in the danger hue (coral
+  `#e8623f`) *plus* its due-badge becomes a glowing ringed circle showing a
+  signed day-count (`−3d`, not the word "overdue"); **upcoming** topics stay
+  plain with a dim `+Nd` badge. The same "wide range, glow only at the top"
+  idea drives the 28-day activity **heatmap** and the calendar's due-count
+  tiers. The wordmark has a blinking block cursor (`Steady▊`, borrowed from
+  a terminal-styled direction that was explored and dropped in favor of
+  this one), and a **rotating motivational line** renders under the heatmap
+  — one of 30 aphorisms about the nature of revision/memory itself (never
+  addressed at the user directly, never "don't break it" framing; see
+  `REVISION_QUOTES` + `dailyQuote()`), picked deterministically by hashing
+  `todayISO()` so it's stable all day and changes tomorrow. Also: a
+  **clickable** forward-looking calendar panel (clicking a due day opens an
+  inline detail panel listing what's due, with quality-rating buttons to
+  review directly from the calendar for today/overdue days), a Todoist
+  project picker and category picker in the add-topic form — both now
+  showing Todoist's real project/sub-project hierarchy indented by depth,
+  not a flat API-order list (`buildProjectTree`/`projectOptionsHtml`,
+  mirroring `buildCategoryTree`'s pre-order-with-depth shape) — a
+  collapsed-by-default category manager panel, a topic list grouped by
+  category when any category exists (exact flat list otherwise — zero
+  visible change for anyone who hasn't used the feature), an archive
+  button, and a "pushed to Todoist" indicator dot. Every design decision
+  here (including the four palette variants considered before landing on
+  Gold Leaf, and the four other full directions explored and rejected —
+  a nautical-instrument theme, a terminal/monospace theme, a graph-paper
+  notebook theme, and a brutalist poster theme) was reviewed by the user
+  against real rendered mockups, not descriptions — text descriptions of a
+  palette aren't sufficient for a design decision like this one. Works
+  standalone via `localStorage` if `/api/*` calls fail.
 - `wrangler.toml` — cron is `30 23 * * *` (23:30 UTC), tuned for the user's
   timezone so revisions land in Todoist before their day starts, not at
   midday. Don't assume this offset is right if the user's timezone changes.
