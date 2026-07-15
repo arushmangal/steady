@@ -217,6 +217,35 @@ duplicated in `public/index.html` (client-side, only used in the
 localStorage fallback mode). If you change the algorithm — or the
 `FRACTION` constant — change it in both places or note the drift.
 
+## Trajectory insight (per-topic, plain-language)
+
+Each topic in `GET /api/topics` carries a `trajectory_note` — a short,
+rule-based sentence about its recent review history (`classifyTrajectory()`
+in `worker/index.js`), e.g. "Rock solid — 5 clean reviews in a row" or
+"You've struggled with this one recently." Deliberately **not** a chart or
+raw EF numbers — the user asked for a plain-language read, not a technical
+one — and deliberately **not** an LLM call, which would be a disproportionate
+architectural addition for a pure function over an array of past 0-5
+ratings. Returns `null` (renders nothing) below 3 recorded reviews, since
+with 1-2 data points any trend claim is noise — same "invisible until
+earned" restraint already used for category headers. Rendered in
+`public/index.html` as `.topic-insight`, styled dim/italic and deliberately
+**not** in Caveat — Caveat stays reserved for the one handwritten touch (the
+rotating daily quote); reusing it per-topic on every row would dilute that
+into a recurring decoration instead of a singular one.
+
+**Local/offline mode does not currently compute this** — `localTopics`
+entries never get a `trajectory_note`, so it silently renders nothing
+offline rather than duplicating the classifier. This was a deliberate
+scope cut (not an oversight): local mode's `reviewLog` only stores bare
+date strings for the heatmap, with no quality value per entry, so there's
+nothing to classify from today. Extending this would mean changing
+`reviewLog` entries to `{date, quality}` objects going forward (with a
+defensive normalizer everywhere `reviewLog` is read, so already-saved
+localStorage data doesn't break) and would make `classifyTrajectory()` a
+fourth hand-synced pair between the two files, alongside `nowIST()`, the
+SM-2 elapsed-time correction, and the category safe-archive guard.
+
 ## Categories (hierarchical structure)
 
 Topics can optionally belong to a `categories` tree — **arbitrary depth**

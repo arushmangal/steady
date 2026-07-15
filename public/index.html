@@ -257,6 +257,7 @@
   .topic.status-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 20px rgba(240,180,41,0.28); }
   .topic-title { font-size: 15px; }
   .topic-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .topic-insight { color: var(--text-dim); font-size: 12px; font-style: italic; margin-top: 2px; }
   .topic-due {
     font-family: Consolas, "Courier New", monospace;
     font-size: 12px; color: var(--text-dim);
@@ -923,6 +924,7 @@
         <div style="flex:1">
           <div class="topic-title">${escapeHtml(t.title)}</div>
           <div class="topic-meta">${metaBits.join(' · ')}</div>
+          ${t.trajectory_note ? `<div class="topic-insight">${escapeHtml(t.trajectory_note)}</div>` : ''}
           <div class="quality-row" id="qrow-${t.id}">
             ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
           </div>
