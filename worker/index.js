@@ -79,6 +79,39 @@ async function wouldCreateCycle(env, categoryId, proposedParentId) {
 }
 
 /**
+ * A short, plain-language read on a topic's recent review history - not a
+ * chart, not raw EF numbers. `qualities` is oldest-to-newest. Returns null
+ * below 3 reviews (with 1-2 points any trend claim is noise), matching the
+ * "invisible until earned" restraint already used for category headers.
+ * First matching rule wins, most-specific first.
+ */
+function classifyTrajectory(qualities) {
+  const n = qualities.length;
+  if (n < 3) return null;
+
+  const trailingStreak = (pred) => {
+    let c = 0;
+    for (let i = n - 1; i >= 0 && pred(qualities[i]); i--) c++;
+    return c;
+  };
+
+  const solid = trailingStreak((q) => q >= 4);
+  if (n >= 5 && solid >= 5) return `Rock solid — ${solid} clean reviews in a row.`;
+
+  const struggling = trailingStreak((q) => q < 3); // <3 is SM-2's own lapse threshold
+  if (struggling >= 2) return `You've struggled with this one recently.`;
+
+  const w = Math.min(3, Math.floor(n / 2));
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const recent = avg(qualities.slice(n - w));
+  const prior = avg(qualities.slice(n - 2 * w, n - w));
+
+  if (recent - prior >= 0.5) return `Recall's been improving over your last ${w} reviews.`;
+  if (prior - recent >= 0.5) return `This one's gotten harder to recall lately.`;
+  return `Holding steady on this one.`;
+}
+
+/**
  * SM-2 scheduling, with an elapsed-time correction on 3rd+ successful
  * reviews (see CLAUDE.md for full derivation/sourcing). Given current
  * state, a 0-5 quality rating, and the real elapsed days since the last
@@ -143,6 +176,21 @@ async function handleApi(request, env, url) {
     const { results } = await env.DB.prepare(
       `SELECT * FROM topics WHERE archived = 0 ORDER BY next_due ASC`
     ).all();
+
+    const { results: reviewRows } = await env.DB.prepare(
+      `SELECT r.topic_id, r.quality FROM reviews r
+       JOIN topics t ON t.id = r.topic_id
+       WHERE t.archived = 0
+       ORDER BY r.topic_id, r.id ASC`
+    ).all();
+    const qualitiesByTopic = {};
+    for (const row of reviewRows) {
+      (qualitiesByTopic[row.topic_id] ||= []).push(row.quality);
+    }
+    for (const topic of results) {
+      topic.trajectory_note = classifyTrajectory(qualitiesByTopic[topic.id] || []);
+    }
+
     return jsonResponse(results);
   }
 
