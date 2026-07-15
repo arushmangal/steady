@@ -32,6 +32,11 @@ run_worker_first = true
 [vars]
 TODOIST_PROJECT_ID = "REPLACE_WITH_TODOIST_PROJECT_ID"
 REVISION_LABEL = "revision"
+# Apply this label to any Todoist task, anywhere in your project tree, to
+# have the daily cron import it as a new Steady topic. The label is
+# removed from the task once imported (the task itself is left alone —
+# only the label's job is "please also track this in Steady").
+STEADY_IMPORT_LABEL = "steady-import"
 
 # --- Secrets (do NOT put these in this file) ---
 # wrangler secret put TODOIST_API_TOKEN

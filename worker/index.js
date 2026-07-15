@@ -569,6 +569,79 @@ async function pushToTodoist(env, topic) {
     .run();
 }
 
+/**
+ * Imports any Todoist task carrying STEADY_IMPORT_LABEL as a new Steady
+ * topic, searched globally (not by project/section — the user's real
+ * Todoist tree is too deep/varied for that to be a meaningful scope).
+ *
+ * source_todoist_task_id is permanent write-once provenance/dedup for the
+ * *original* capture task, deliberately separate from todoist_task_id
+ * (the current cycle's outstanding *revision* task, which starts NULL here
+ * and gets populated normally the first time pushToTodoist fires on this
+ * topic's real next_due) - conflating them would make pushToTodoist's
+ * "already pushed, skip" guard block the topic's real first revision task.
+ *
+ * next_due is tomorrow, not today: an immediate same-day bounce-back for
+ * something just captured seconds ago would read as noise, not a
+ * considered schedule.
+ *
+ * The original task keeps existing after import - only the marker label
+ * is removed (confirmation the task's "please track this in Steady" job
+ * is done), since the task may have its own independent Todoist life
+ * (due date, other labels) unrelated to being "done".
+ */
+async function runInboundImport(env) {
+  const label = env.STEADY_IMPORT_LABEL || "steady-import";
+  const res = await fetch(`https://api.todoist.com/api/v1/tasks?label=${encodeURIComponent(label)}`, {
+    headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Todoist label search failed: ${res.status} ${await res.text()}`);
+  }
+  const { results } = await res.json();
+
+  const tomorrow = nowIST();
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const nextDue = tomorrow.toISOString().slice(0, 10);
+
+  let succeeded = 0;
+  let failed = 0;
+  for (const task of results) {
+    try {
+      const existing = await env.DB.prepare(
+        `SELECT 1 FROM topics WHERE source_todoist_task_id = ?`
+      ).bind(task.id).first();
+      // Label removal always runs below, even if already imported - so a
+      // prior run's label-removal failure (topic created, but the label
+      // stuck around) self-heals on the next run instead of persisting
+      // forever and resurfacing in every future search.
+      if (!existing) {
+        await env.DB.prepare(
+          `INSERT INTO topics (title, next_due, source_todoist_task_id) VALUES (?, ?, ?)`
+        ).bind(task.content, nextDue, task.id).run();
+      }
+
+      const remainingLabels = (task.labels || []).filter((l) => l !== label);
+      const updateRes = await fetch(`https://api.todoist.com/api/v1/tasks/${task.id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.TODOIST_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ labels: remainingLabels }),
+      });
+      if (!updateRes.ok) {
+        throw new Error(`Failed to remove import label from task ${task.id}: ${updateRes.status} ${await updateRes.text()}`);
+      }
+      succeeded++;
+    } catch (err) {
+      console.error(`runInboundImport failed for task ${task.id}: ${err}`);
+      failed++;
+    }
+  }
+  return { succeeded, failed };
+}
+
 async function runDailyPush(env) {
   const { results } = await env.DB.prepare(
     `SELECT * FROM topics WHERE archived = 0 AND next_due <= ?`
@@ -616,6 +689,7 @@ async function runOperation(env, operation, fn) {
 
 async function runScheduledSync(env) {
   await runOperation(env, "push", runDailyPush);
+  await runOperation(env, "import", runInboundImport);
 }
 
 /**

@@ -27,11 +27,21 @@ CREATE TABLE IF NOT EXISTS topics (
   last_reviewed   TEXT,
 
   -- Todoist link
-  todoist_task_id    TEXT,
+  todoist_task_id    TEXT,             -- the CURRENT cycle's outstanding revision task, if pushed
   todoist_project_id TEXT,             -- overrides category/ancestor/global default when set
+
+  -- Permanent, write-once provenance for topics created via the inbound
+  -- Todoist import (a task labelled STEADY_IMPORT_LABEL). Deliberately
+  -- separate from todoist_task_id above: that column is the current
+  -- cycle's outstanding *revision* task and starts NULL on import, so
+  -- pushToTodoist's "already pushed, skip" guard doesn't confuse the
+  -- original capture task for the topic's first real revision task.
+  source_todoist_task_id TEXT,
 
   archived        INTEGER NOT NULL DEFAULT 0
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_source_todoist_task_id
+  ON topics(source_todoist_task_id) WHERE source_todoist_task_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS reviews (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,

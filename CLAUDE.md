@@ -329,6 +329,54 @@ SM-2 elapsed-time correction, and the category safe-archive guard
 (`archiveCategory`'s local-mode duplicate of the server's active-children/
 active-topics check).
 
+## Todoist inbound import (Todoist → Steady, the other direction)
+
+Steady already pushes due topics *to* Todoist. `runInboundImport` (called
+from the daily cron via `runOperation(env, "import", ...)`, logging into
+`sync_log` the same as the outbound push) goes the other way: applying the
+`STEADY_IMPORT_LABEL` label (default `"steady-import"`, configurable in
+`wrangler.toml`) to *any* Todoist task, anywhere in the account's project
+tree, gets it imported as a new Steady topic on the next cron run.
+
+**Searched globally by label, not by project/section** — confirmed against
+the real account this was designed for: 50 projects, nested several levels
+deep (e.g. Studying > Block A > Coding and DSA > Bari C++ — Part 1, itself
+split into 7 sections), too varied for "watch one project" to be a
+meaningful scope.
+
+**`topics.source_todoist_task_id` is a separate column from
+`todoist_task_id`, deliberately** — the former is permanent, write-once
+provenance/dedup for the *original capture task*; the latter is the
+*current cycle's* outstanding revision task and starts `NULL` on import,
+populated the normal way the first time `pushToTodoist` fires on the
+topic's real `next_due`. Conflating them would make `pushToTodoist`'s
+"already pushed, skip" guard block the topic's real first revision task
+forever. A partial unique index on `source_todoist_task_id` (`WHERE
+source_todoist_task_id IS NOT NULL`) backstops the application-level dedup
+check.
+
+**Imported topics land with `next_due` = tomorrow**, not today — an
+immediate same-day bounce-back for something just captured seconds ago
+would read as noise, not a considered schedule.
+
+**The original Todoist task is never completed or deleted — only the
+marker label is removed.** Its only job is "please also track this in
+Steady"; the task may have its own independent Todoist life (due date,
+other labels) that has nothing to do with being "done." Label removal
+happens even when the topic already exists (i.e. even on a re-seen,
+already-imported task) — so if label removal itself ever failed on a prior
+run after the topic was already created, the task self-heals on the next
+run instead of resurfacing in every future search forever.
+
+Two real Todoist v1 endpoints this needed, both verified empirically
+against a real disposable test task (not assumed — same discipline as the
+REST v2 migration): `GET /tasks?label=X` returns `{results: [...],
+next_cursor}` (same wrapping convention as the projects-list endpoint) with
+each task's `labels` field as an array of label **name strings**; `POST
+/tasks/{id}` with a partial body (e.g. `{"labels": [...]}`) updates a task
+and returns a **plain, unwrapped** task object (matching task-creation's
+shape, not the list endpoints' wrapping).
+
 ## Deployment
 
 Live as a single Cloudflare Worker (D1-backed, static assets served from
