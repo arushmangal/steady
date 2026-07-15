@@ -8,16 +8,29 @@ due-today revisions into Todoist so you actually get notified.
 
 - **Cloudflare Workers** — single Worker serves both the API (`/api/*`) and
   the static frontend (everything else, from `/public`)
-- **Cloudflare D1** — SQLite database, three tables: `topics`, `reviews`,
-  and `categories` (an optional, arbitrary-depth tree topics can belong to)
-- **Todoist REST API v2** — daily cron (23:30 UTC / 5:00 AM IST) pushes
-  topics due today or overdue into Todoist as tasks. Each topic can target
-  its own Todoist project (picked from a dropdown in the UI, backed by
-  `GET /api/todoist/projects`); failing that, its category's own override,
-  then the nearest ancestor category's override, then the default
-  `TODOIST_PROJECT_ID` project
+- **Cloudflare D1** — SQLite database, four tables: `topics`, `reviews`
+  (each review keeps a full pre-review snapshot, so a rating can be
+  undone), `categories` (an optional, arbitrary-depth tree topics can
+  belong to), and `sync_log` (one row per cron-driven Todoist operation,
+  so a failure is visible in the UI, not just the Worker's own logs)
+- **Todoist API v1** (`api.todoist.com/api/v1`) — daily cron (23:30 UTC /
+  5:00 AM IST) pushes topics due today or overdue into Todoist as tasks.
+  Each topic can target its own Todoist project (picked from a dropdown in
+  the UI — shown indented by Todoist's real project/sub-project hierarchy,
+  backed by `GET /api/todoist/projects`); failing that, its category's own
+  override, then the nearest ancestor category's override, then the
+  default `TODOIST_PROJECT_ID` project. A "Last sync: N pushed, N failed"
+  line in the UI surfaces the cron's own health
 - A forward-looking, clickable calendar (review directly from a due day)
   and a 28-day activity heatmap, alongside the flat/grouped topic list
+- Each topic gets a short, plain-language read on its recent review
+  history once it has 3+ reviews (e.g. "Rock solid — 5 clean reviews in a
+  row"), and a rated review can be undone for a few seconds after
+  ("Rated 3 · Undo") in case of a mis-tap
+- Keyboard shortcuts: `0`–`5` rates whichever topic's quality row is open,
+  `/` focuses the add-topic input, `←`/`→` move the calendar a month
+- Installable as its own app (phone home screen / desktop standalone
+  window) via a manifest + service worker
 - No build step, no frontend framework — `public/index.html` is plain
   HTML/CSS/JS and also works standalone via `localStorage` if the API isn't
   reachable
@@ -79,9 +92,9 @@ wrangler secret put TODOIST_API_TOKEN
 
 This keeps it out of the repo and out of `wrangler.toml` entirely. Until
 it's set, everything works except the daily Todoist push
-(`/api/todoist/projects` returns 503, and the cron job silently skips
-pushing — each failure is logged individually and doesn't block the rest of
-the batch).
+(`/api/todoist/projects` returns 503, and each push attempt fails — caught
+per-topic so one failure doesn't block the rest of the batch, and counted
+in the "Last sync" line in the UI rather than only ever logged).
 
 **5. (Optional) Gate the app behind Basic Auth**
 
@@ -125,9 +138,15 @@ See `CLAUDE.md` for the exact formula and where it's implemented.
 
 ## Status
 
-Deployed and smoke-tested: topic creation, SM-2 review scoring (verified
-against the spec's reference EF/interval values), archiving, and stats all
-work against a real D1 database. The one untested leg is the Todoist push
-itself, which needs `TODOIST_API_TOKEN` set (see Setup) — once that's in,
-watch the next cron run, or use `wrangler tail` to confirm tasks land in
-the right Todoist project.
+Deployed and in daily real use: topic creation, SM-2 review scoring
+(verified against the spec's reference EF/interval values), review undo,
+archiving, categories, the calendar/heatmap, and the Todoist push have all
+been exercised against a real D1 database and a real Todoist account, not
+just a first draft. A "Last sync" line in the UI surfaces the daily cron's
+own health, so a push failure is visible instead of only sitting in the
+Worker's logs.
+
+Still ahead: syncing in the other direction — a Todoist task tagged with a
+marker label becoming a new Steady topic, and completing a pushed task
+feeding a review's quality rating back into Steady (currently reviews only
+happen from Steady's own UI). See `CLAUDE.md` for the design.
