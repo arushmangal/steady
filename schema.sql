@@ -31,12 +31,18 @@ CREATE TABLE IF NOT EXISTS topics (
   todoist_project_id TEXT,             -- overrides category/ancestor/global default when set
 
   -- Permanent, write-once provenance for topics created via the inbound
-  -- Todoist import (a task labelled STEADY_IMPORT_LABEL). Deliberately
-  -- separate from todoist_task_id above: that column is the current
-  -- cycle's outstanding *revision* task and starts NULL on import, so
-  -- pushToTodoist's "already pushed, skip" guard doesn't confuse the
-  -- original capture task for the topic's first real revision task.
+  -- Todoist import (a task labelled STEADY_LABEL, not yet REVISION_LABEL).
+  -- todoist_task_id above is set to this SAME task's id at import time -
+  -- the task is adopted as the topic's own outstanding revision task, not
+  -- left NULL, so it can be completed from Todoist on the very first cycle.
   source_todoist_task_id TEXT,
+
+  -- Set by completion-sync when a completed Todoist task had no parseable
+  -- 0-5 confidence digit in its latest comment — SM-2 state is left
+  -- untouched in that case (the task is reopened and re-dued today instead
+  -- of a review being recorded). Cleared back to NULL by applyReview() the
+  -- next time *any* real review is recorded for this topic.
+  unconfirmed_completion_at TEXT,
 
   archived        INTEGER NOT NULL DEFAULT 0
 );
