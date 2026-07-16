@@ -4,7 +4,7 @@
  * Routes:
  *   GET    /api/topics              list active topics, ordered by next_due
  *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id? }
- *   POST   /api/topics/:id/review   record a review { quality: 0-5 } -> runs SM-2, returns updated topic
+ *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2, appends "*Xhrs Ymins" to the pushed Todoist task's description if minutes_spent given and a task exists, returns updated topic
  *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
  *   POST   /api/topics/:id/category reassign a topic's category { category_id }
  *   DELETE /api/topics/:id          archive a topic
@@ -178,7 +178,7 @@ function sm2(prev, quality, elapsedDays) {
  * click in the Steady UI (the /review route below) or by the Todoist
  * completion-sync cron (runCompletionSync).
  */
-async function applyReview(env, id, quality) {
+async function applyReview(env, id, quality, minutesSpent) {
   const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
   if (!topic) return null;
 
@@ -195,15 +195,58 @@ async function applyReview(env, id, quality) {
     ).bind(after.ef, after.interval_days, after.repetitions, after.next_due, todayISO(), id),
     env.DB.prepare(
       `INSERT INTO reviews (topic_id, quality, ef_before, ef_after, interval_before, interval_after,
-                             repetitions_before, next_due_before, last_reviewed_before)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                             repetitions_before, next_due_before, last_reviewed_before, minutes_spent)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       id, quality, before.ef, after.ef, before.interval_days, after.interval_days,
-      before.repetitions, topic.next_due, topic.last_reviewed
+      before.repetitions, topic.next_due, topic.last_reviewed, minutesSpent ?? null
     ),
   ]);
 
+  // Best-effort only: annotating the Todoist task is a nice-to-have, and
+  // must never block the review itself (the SM-2 update above) from
+  // succeeding just because Todoist is unreachable or the task is gone.
+  if (minutesSpent != null && topic.todoist_task_id) {
+    try {
+      await appendTimeToTodoistTask(env, topic.todoist_task_id, minutesSpent);
+    } catch (err) {
+      console.error(`Failed to append time-spent to Todoist task ${topic.todoist_task_id}: ${err}`);
+    }
+  }
+
   return env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+}
+
+/**
+ * Appends "*Xhrs Ymins" to a Todoist task's description (on a new line,
+ * preserving whatever's already there rather than overwriting it — the
+ * task may carry notes the user added by hand).
+ */
+async function appendTimeToTodoistTask(env, taskId, minutesSpent) {
+  const getRes = await fetch(`https://api.todoist.com/api/v1/tasks/${taskId}`, {
+    headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
+  });
+  if (!getRes.ok) {
+    throw new Error(`Failed to fetch task ${taskId}: ${getRes.status} ${await getRes.text()}`);
+  }
+  const task = await getRes.json();
+
+  const hours = Math.floor(minutesSpent / 60);
+  const mins = minutesSpent % 60;
+  const note = `*${hours}hrs ${mins}mins`;
+  const description = task.description ? `${task.description}\n${note}` : note;
+
+  const updateRes = await fetch(`https://api.todoist.com/api/v1/tasks/${taskId}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.TODOIST_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ description }),
+  });
+  if (!updateRes.ok) {
+    throw new Error(`Failed to update task ${taskId} description: ${updateRes.status} ${await updateRes.text()}`);
+  }
 }
 
 async function handleApi(request, env, url) {
@@ -419,8 +462,15 @@ async function handleApi(request, env, url) {
     if (!Number.isInteger(quality) || quality < 0 || quality > 5) {
       return jsonResponse({ error: "quality must be an integer 0-5" }, { status: 400 });
     }
+    let minutesSpent = null;
+    if (body.minutes_spent !== undefined && body.minutes_spent !== null) {
+      minutesSpent = Number(body.minutes_spent);
+      if (!Number.isInteger(minutesSpent) || minutesSpent < 0) {
+        return jsonResponse({ error: "minutes_spent must be a non-negative integer" }, { status: 400 });
+      }
+    }
 
-    const updated = await applyReview(env, id, quality);
+    const updated = await applyReview(env, id, quality, minutesSpent);
     if (!updated) return jsonResponse({ error: "not found" }, { status: 404 });
     return jsonResponse(updated);
   }
