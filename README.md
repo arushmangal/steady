@@ -14,13 +14,18 @@ due-today revisions into Todoist so you actually get notified.
   belong to), and `sync_log` (one row per cron-driven Todoist operation,
   so a failure is visible in the UI, not just the Worker's own logs)
 - **Todoist API v1** (`api.todoist.com/api/v1`) — daily cron (23:30 UTC /
-  5:00 AM IST) pushes topics due today or overdue into Todoist as tasks.
-  Each topic can target its own Todoist project (picked from a dropdown in
-  the UI — shown indented by Todoist's real project/sub-project hierarchy,
-  backed by `GET /api/todoist/projects`); failing that, its category's own
-  override, then the nearest ancestor category's override, then the
-  default `TODOIST_PROJECT_ID` project. A "Last sync: N pushed, N failed"
-  line in the UI surfaces the cron's own health
+  5:00 AM IST) runs three operations, each independently logged so a
+  failure in one doesn't hide the others: (1) pushes topics due today or
+  overdue into Todoist as tasks — each topic can target its own Todoist
+  project (picked from a dropdown in the UI — shown indented by Todoist's
+  real project/sub-project hierarchy, backed by `GET /api/todoist/projects`),
+  failing that its category's own override, then the nearest ancestor
+  category's override, then the default `TODOIST_PROJECT_ID` project; (2)
+  imports any Todoist task tagged with a marker label as a new Steady
+  topic; (3) syncs completed, tagged Todoist tasks back into Steady as
+  reviews (quality read from the task's latest comment, safely defaulted
+  if there isn't one). A "Last sync: N pushed, N failed" line in the UI
+  surfaces the cron's own health
 - A forward-looking, clickable calendar (review directly from a due day)
   and a 28-day activity heatmap, alongside the flat/grouped topic list
 - Each topic gets a short, plain-language read on its recent review
@@ -140,13 +145,13 @@ See `CLAUDE.md` for the exact formula and where it's implemented.
 
 Deployed and in daily real use: topic creation, SM-2 review scoring
 (verified against the spec's reference EF/interval values), review undo,
-archiving, categories, the calendar/heatmap, and the Todoist push have all
-been exercised against a real D1 database and a real Todoist account, not
-just a first draft. A "Last sync" line in the UI surfaces the daily cron's
-own health, so a push failure is visible instead of only sitting in the
-Worker's logs.
-
-Still ahead: syncing in the other direction — a Todoist task tagged with a
-marker label becoming a new Steady topic, and completing a pushed task
-feeding a review's quality rating back into Steady (currently reviews only
-happen from Steady's own UI). See `CLAUDE.md` for the design.
+archiving, categories, the calendar/heatmap, and all three Todoist cron
+operations (push, inbound import, completion sync) have all been exercised
+against a real D1 database and a real Todoist account, not just a first
+draft. A "Last sync" line in the UI surfaces the daily cron's own health,
+so a failure in any of the three is visible instead of only sitting in the
+Worker's logs. The Todoist loop now runs both directions: push a due topic
+out as a task, tag any task to pull it in as a new topic, and complete a
+pushed task to log its review automatically — see `CLAUDE.md` for the full
+design and the real-API quirks (undocumented, found by testing) each one
+turned up.
