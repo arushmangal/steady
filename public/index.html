@@ -132,7 +132,7 @@
     background: rgba(255,255,255,0.03);
     border: 1px solid var(--border);
     color: var(--text-dim);
-    width: 28px; height: 28px; border-radius: 6px; padding: 0;
+    width: 36px; height: 36px; border-radius: 6px; padding: 0;
     font-size: 16px; line-height: 1; cursor: pointer;
   }
   .cal-nav:hover { border-color: var(--accent-dim); color: var(--text); }
@@ -143,6 +143,7 @@
   .cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 4px; }
   .cal-day {
     aspect-ratio: 1.6;
+    min-width: 0;
     border-radius: 7px;
     border: 1px solid var(--border);
     background: #1c1409;
@@ -200,11 +201,12 @@
   }
   .cal-detail-title { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
   .cal-detail-topic {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 0;
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+    gap: 6px 0; padding: 8px 0;
   }
   .cal-detail-topic + .cal-detail-topic { border-top: 1px solid rgba(255,255,255,0.06); }
-  .cal-detail-quality { display: flex; gap: 4px; }
+  .cal-detail-topic > span { min-width: 0; }
+  .cal-detail-quality { display: flex; gap: 4px; flex-wrap: wrap; }
 
   form.add-topic { display: flex; gap: 8px; flex-wrap: wrap; }
   input[type="text"] {
@@ -295,7 +297,8 @@
   .pushed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
   .archive-btn {
     background: transparent; border: none; color: var(--text-dim);
-    font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1;
+    font-size: 16px; cursor: pointer; padding: 8px; line-height: 1;
+    margin: -8px;
   }
   .archive-btn:hover { color: var(--danger); }
   .archive-confirm-row { display: flex; align-items: center; gap: 6px; }

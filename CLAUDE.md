@@ -541,6 +541,53 @@ Local/offline mode does not currently send `minutes_spent` to Todoist
 skip gracefully" posture already used for sync-status and the trajectory
 note.
 
+## Mobile: a real overflow bug, not just "needs polish"
+
+As of 2026-07-17, the frontend had a genuine layout bug on phone-width
+viewports, found by actually loading it at 375px/320px via Playwright
+rather than guessing from the CSS: `.cal-day` (`aspect-ratio: 1.6`, itself
+`display: flex`) sat inside `.cal-grid`'s `repeat(7, 1fr)` CSS Grid, and
+that specific combination — a grid item that is *both* a flex container
+*and* has `aspect-ratio` set — breaks Chromium's grid track shrinking.
+Each column locked at a fixed ~80px regardless of the actual viewport,
+which is why the entire page was 254px wider than a 375px phone screen
+(confirmed via `document.documentElement.scrollWidth -
+document.documentElement.clientWidth`) — plain `aspect-ratio: 1` on a
+non-flex item (the heatmap's `.heat-cell`) shrinks correctly, so this is
+specifically a flex+aspect-ratio-in-a-grid interaction, not aspect-ratio
+alone. **Fix: `min-width: 0` on `.cal-day`** — grid items default to
+`min-width: auto`, which lets their content's intrinsic minimum size block
+shrinking below it; `min-width: 0` overrides that. If any *other*
+aspect-ratio'd flex item is ever added inside a CSS Grid in this file, it
+needs the same explicit `min-width: 0` (and `min-height: 0` if the grid is
+row-constrained) — this isn't a one-off fix, it's a pattern to repeat.
+
+A second, narrower overflow existed in the calendar's day-detail panel
+(`.cal-detail-topic`): a plain flex row with a title on one side and up to
+six `.qbtn` quality buttons on the other, no wrap allowed, so on a ~320px
+phone the button group had nowhere to go but past the right edge. Fixed
+with `flex-wrap: wrap` on `.cal-detail-topic` and `.cal-detail-quality` —
+the buttons now drop to their own line under the title when there isn't
+room, matching the existing topic-row pattern where `.quality-row` already
+renders below the title rather than beside it.
+
+Also bumped two touch targets that were uncomfortably small on a phone:
+`.cal-nav` (28px → 36px) and `.archive-btn` (enlarged the tappable padding
+via `padding: 8px; margin: -8px`, a negative-margin trick that grows the
+hit area without changing the visible glyph's size or shifting surrounding
+layout). `.qbtn` (30px) was deliberately left alone — six of them in a row
+already reads as compact-but-intentional, and enlarging to a full 44px
+touch target risks reintroducing overflow on the smallest phones (320px)
+for exactly the same reason the calendar just broke.
+
+Verified via Playwright at 320px and 375px (both the initial load and with
+the time-prompt/quality-row/calendar-detail all open at once, since fixed-
+position elements and dynamically-inserted content are exactly where a
+regression would hide) and re-verified at 1280px to confirm none of this
+changed anything for desktop, since none of the fixes are behind a media
+query — they're corrections to rules that were always wrong, not
+mobile-specific overrides.
+
 ## Deployment
 
 Live as a single Cloudflare Worker (D1-backed, static assets served from
