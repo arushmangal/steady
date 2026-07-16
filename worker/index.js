@@ -19,8 +19,12 @@
  *
  * Anything else falls through to the static assets binding (the frontend in /public).
  *
- * Scheduled (cron, see wrangler.toml): once a day, finds topics due today or overdue
- * and pushes a matching Todoist task for each, labelled with REVISION_LABEL.
+ * Scheduled (cron, see wrangler.toml): once a day, runs three operations in
+ * sequence, each logged to sync_log independently via runOperation - (1)
+ * pushes topics due today/overdue to Todoist, labelled REVISION_LABEL; (2)
+ * imports any Todoist task labelled STEADY_IMPORT_LABEL as a new topic; (3)
+ * syncs completed, REVISION_LABEL-tagged Todoist tasks back into Steady as
+ * reviews (quality parsed from the task's latest comment, default 3).
  */
 
 // This app is single-user and that user is on IST (UTC+5:30, no DST) — see
@@ -165,6 +169,41 @@ function sm2(prev, quality, elapsedDays) {
     repetitions,
     next_due: next.toISOString().slice(0, 10),
   };
+}
+
+/**
+ * Records a review for a topic and returns its updated row, or null if the
+ * topic doesn't exist. The one place review-application logic lives -
+ * exactly one code path applies a review whether it's triggered by a user's
+ * click in the Steady UI (the /review route below) or by the Todoist
+ * completion-sync cron (runCompletionSync).
+ */
+async function applyReview(env, id, quality) {
+  const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+  if (!topic) return null;
+
+  const elapsedDays = topic.last_reviewed
+    ? Math.round((Date.parse(todayISO()) - Date.parse(topic.last_reviewed)) / 86400000)
+    : 0;
+
+  const before = { ef: topic.ef, interval_days: topic.interval_days, repetitions: topic.repetitions };
+  const after = sm2(before, quality, elapsedDays);
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE topics SET ef = ?, interval_days = ?, repetitions = ?, next_due = ?, last_reviewed = ? WHERE id = ?`
+    ).bind(after.ef, after.interval_days, after.repetitions, after.next_due, todayISO(), id),
+    env.DB.prepare(
+      `INSERT INTO reviews (topic_id, quality, ef_before, ef_after, interval_before, interval_after,
+                             repetitions_before, next_due_before, last_reviewed_before)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id, quality, before.ef, after.ef, before.interval_days, after.interval_days,
+      before.repetitions, topic.next_due, topic.last_reviewed
+    ),
+  ]);
+
+  return env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
 }
 
 async function handleApi(request, env, url) {
@@ -381,31 +420,8 @@ async function handleApi(request, env, url) {
       return jsonResponse({ error: "quality must be an integer 0-5" }, { status: 400 });
     }
 
-    const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
-    if (!topic) return jsonResponse({ error: "not found" }, { status: 404 });
-
-    const elapsedDays = topic.last_reviewed
-      ? Math.round((Date.parse(todayISO()) - Date.parse(topic.last_reviewed)) / 86400000)
-      : 0;
-
-    const before = { ef: topic.ef, interval_days: topic.interval_days, repetitions: topic.repetitions };
-    const after = sm2(before, quality, elapsedDays);
-
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE topics SET ef = ?, interval_days = ?, repetitions = ?, next_due = ?, last_reviewed = ? WHERE id = ?`
-      ).bind(after.ef, after.interval_days, after.repetitions, after.next_due, todayISO(), id),
-      env.DB.prepare(
-        `INSERT INTO reviews (topic_id, quality, ef_before, ef_after, interval_before, interval_after,
-                               repetitions_before, next_due_before, last_reviewed_before)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        id, quality, before.ef, after.ef, before.interval_days, after.interval_days,
-        before.repetitions, topic.next_due, topic.last_reviewed
-      ),
-    ]);
-
-    const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+    const updated = await applyReview(env, id, quality);
+    if (!updated) return jsonResponse({ error: "not found" }, { status: 404 });
     return jsonResponse(updated);
   }
 
@@ -642,6 +658,80 @@ async function runInboundImport(env) {
   return { succeeded, failed };
 }
 
+/**
+ * Syncs completed Todoist tasks back into Steady as reviews. For each
+ * completed task matching a topic's todoist_task_id, reads the task's most
+ * recent comment (added since the task was created - inherently scoped,
+ * since each review cycle's task is freshly created and never reused),
+ * parses a bare 0-5 digit out of it, and defaults to quality 3 ("did it, no
+ * complaint" - SM-2's own minimum "successful recall" threshold) if the
+ * comment is missing or unparseable. Applies the review via the same
+ * applyReview() the /review route uses - exactly one code path applies a
+ * review regardless of whether a user clicked or Todoist triggered it.
+ *
+ * Clears todoist_task_id back to NULL after consuming a completion - this
+ * is what makes the topic push-eligible again on its next due date
+ * (pushToTodoist's "already pushed, skip" guard checks this column), fixing
+ * a real dormant bug: without this, a topic could only ever be pushed once
+ * in its entire life, no matter how many future review cycles it went
+ * through. It also means a completion is only ever consumed once - the
+ * fixed lookback window below can safely re-see the same completed task on
+ * a later run without reprocessing it.
+ */
+async function runCompletionSync(env) {
+  const label = env.REVISION_LABEL || "revision";
+  // A generous fixed window (not derived from sync_log's last-successful-run
+  // timestamp - that would couple this feature's correctness to another
+  // table's data existing/being well-formed) so a missed cron run still
+  // gets caught on the next one.
+  const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  const until = new Date().toISOString();
+  const res = await fetch(
+    `https://api.todoist.com/api/v1/tasks/completed/by_completion_date?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`,
+    { headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` } }
+  );
+  if (!res.ok) {
+    throw new Error(`Todoist completed-tasks search failed: ${res.status} ${await res.text()}`);
+  }
+  const { items } = await res.json();
+  // This endpoint's own `label` query param does NOT actually filter
+  // (confirmed empirically - unrelated completed tasks came back even when
+  // passing label=revision), so labels are filtered here in JS instead.
+  const labeled = items.filter((item) => (item.labels || []).includes(label));
+
+  let succeeded = 0;
+  let failed = 0;
+  for (const task of labeled) {
+    try {
+      const topic = await env.DB.prepare(
+        `SELECT * FROM topics WHERE todoist_task_id = ?`
+      ).bind(task.id).first();
+      if (!topic) continue; // not a task Steady pushed, or already resolved - not a failure
+
+      const commentsRes = await fetch(`https://api.todoist.com/api/v1/comments?task_id=${task.id}`, {
+        headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
+      });
+      if (!commentsRes.ok) {
+        throw new Error(`Failed to fetch comments for task ${task.id}: ${commentsRes.status} ${await commentsRes.text()}`);
+      }
+      const { results: comments } = await commentsRes.json();
+      comments.sort((a, b) => Date.parse(a.posted_at) - Date.parse(b.posted_at)); // don't trust implicit ordering
+      const latest = comments.length ? comments[comments.length - 1] : null;
+      const match = latest ? latest.content.match(/\b[0-5]\b/) : null;
+      const quality = match ? Number(match[0]) : 3;
+
+      const updated = await applyReview(env, topic.id, quality);
+      if (!updated) throw new Error(`applyReview returned nothing for topic ${topic.id}`);
+      await env.DB.prepare(`UPDATE topics SET todoist_task_id = NULL WHERE id = ?`).bind(topic.id).run();
+      succeeded++;
+    } catch (err) {
+      console.error(`runCompletionSync failed for task ${task.id}: ${err}`);
+      failed++;
+    }
+  }
+  return { succeeded, failed };
+}
+
 async function runDailyPush(env) {
   const { results } = await env.DB.prepare(
     `SELECT * FROM topics WHERE archived = 0 AND next_due <= ?`
@@ -690,6 +780,7 @@ async function runOperation(env, operation, fn) {
 async function runScheduledSync(env) {
   await runOperation(env, "push", runDailyPush);
   await runOperation(env, "import", runInboundImport);
+  await runOperation(env, "completion_sync", runCompletionSync);
 }
 
 /**
