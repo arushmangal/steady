@@ -377,6 +377,59 @@ each task's `labels` field as an array of label **name strings**; `POST
 and returns a **plain, unwrapped** task object (matching task-creation's
 shape, not the list endpoints' wrapping).
 
+## Todoist completion sync (Todoist → Steady, closing the review loop)
+
+Steady pushes a "Review: X" task when a topic's due; until now, checking
+that task off in Todoist did nothing — reviewing still meant coming back to
+Steady's own UI. `runCompletionSync` (third cron operation, logged as
+`completion_sync` in `sync_log`) closes this: it finds completed Todoist
+tasks labelled `REVISION_LABEL` in a trailing 3-day window, matches them
+against topics via `todoist_task_id`, and applies a review automatically.
+
+**Quality comes from the task's most recent comment, parsed for a bare 0–5
+digit** (`/\b[0-5]\b/`); no comment, or nothing parseable, **defaults to
+quality 3** — SM-2's own minimum "successful recall" threshold, i.e. "did
+it, no complaint," rather than guessing generously or resetting progress.
+Considered and rejected: six new per-quality labels (`q0`–`q5`, more
+vocabulary pollution than one label costs the inbound-import feature, no
+real reliability gain over a comment + safe default) and Todoist's own
+P1–P4 priority field (already a live, actively-used, orthogonal meaning —
+task urgency — in the real account this was built against; would collide
+with its existing use and compress lossily onto a 0-5 scale anyway).
+
+**`applyReview(env, topicId, quality)` is the one place review-recording
+logic lives** — extracted from `POST /api/topics/:id/review` so exactly one
+code path applies a review whether a user clicked a quality button or
+Todoist triggered it. The route is now a thin wrapper: validate the 0-5
+body, call `applyReview`, 404 if it returns null.
+
+**Clearing `topics.todoist_task_id` back to `NULL` after consuming a
+completion fixes a real dormant bug**: `pushToTodoist`'s "already pushed,
+skip" guard checked this column but nothing ever cleared it, so before this
+feature, a topic could only ever be pushed to Todoist **once in its entire
+life**, no matter how many future review cycles it went through. This also
+means a completion is only ever consumed once, so the fixed lookback window
+can safely re-see the same completed task on a later run without
+reprocessing it — no extra "already synced" tracking column needed.
+
+**The completed-tasks endpoint's own `label` query parameter does not
+actually filter** — confirmed empirically: a request with `label=revision`
+still returned unrelated completed tasks with empty `labels: []`. Labels
+are filtered client-side in JS instead. The endpoint also requires **both**
+`since` and `until` (a lone `since` 400s), and wraps its response in
+`{items: [...]}` — a different key than the `{results: [...]}` wrapping
+every other list endpoint in this file uses. `GET /comments?task_id=X`
+follows the usual `{results: [...], next_cursor}` shape, each comment
+carrying `content` and `posted_at`; comments are sorted explicitly by
+`posted_at` in JS rather than trusting the API's implicit ordering.
+
+Verified end-to-end against three real disposable test topics (pushed for
+real, one completed with a "3" comment, one with no comment, one with a "5"
+comment) plus, unprompted, a genuinely orphaned topic left over from an
+earlier session's push test — all four were matched and reviewed
+correctly, proving the digit-parsing, the safe default, and the dedup-via-
+clearing all work against real data, not just crafted fixtures.
+
 ## Deployment
 
 Live as a single Cloudflare Worker (D1-backed, static assets served from
