@@ -329,91 +329,115 @@ SM-2 elapsed-time correction, and the category safe-archive guard
 (`archiveCategory`'s local-mode duplicate of the server's active-children/
 active-topics check).
 
-## Todoist inbound import (Todoist → Steady, the other direction)
+## Todoist sync: the unified `steady`/`review` label scheme
 
-Steady already pushes due topics *to* Todoist. `runInboundImport` (called
-from the daily cron via `runOperation(env, "import", ...)`, logging into
-`sync_log` the same as the outbound push) goes the other way: applying the
-`STEADY_IMPORT_LABEL` label (default `"steady-import"`, configurable in
-`wrangler.toml`) to *any* Todoist task, anywhere in the account's project
-tree, gets it imported as a new Steady topic on the next cron run.
+As of 2026-07-16, both sync directions (Steady → Todoist and Todoist →
+Steady) are gated by one label, replacing an earlier design that used two
+separate, narrower labels (`STEADY_IMPORT_LABEL` for import requests,
+`REVISION_LABEL` alone for completion matching). The user's own framing:
+"anything that goes from steady to todoist, gets a steady label and
+revision label on it. anything that goes from todoist to steady has to
+have a steady label on it. revision label if already there, great, else
+steady assigns it. just revision label doesn't mean it goes to steady."
 
-**Searched globally by label, not by project/section** — confirmed against
-the real account this was designed for: 50 projects, nested several levels
-deep (e.g. Studying > Block A > Coding and DSA > Bari C++ — Part 1, itself
-split into 7 sections), too varied for "watch one project" to be a
-meaningful scope.
+- **`STEADY_LABEL`** (env var, default `"steady"`) is the actual sync gate
+  — required on a task for it to participate in *either* direction.
+- **`REVISION_LABEL`** (env var, default **`"review"`** — this is the real
+  label in the user's Todoist account, not `"revision"`; an earlier default
+  value was simply wrong and got corrected here) means "there is already a
+  live, outstanding revision task for this topic." It co-occurs with
+  `steady` on every task `pushToTodoist` creates, and gets added by the
+  importer the instant it adopts a task, so the same task is never
+  re-imported on a later scan.
+- A task carrying `REVISION_LABEL` **without** `STEADY_LABEL` is not synced
+  by either direction at all — confirmed live: tagging a task `review`-only
+  and completing it is silently ignored by both `runInboundImport` and
+  `runCompletionSync`.
 
-**`topics.source_todoist_task_id` is a separate column from
-`todoist_task_id`, deliberately** — the former is permanent, write-once
-provenance/dedup for the *original capture task*; the latter is the
-*current cycle's* outstanding revision task and starts `NULL` on import,
-populated the normal way the first time `pushToTodoist` fires on the
-topic's real `next_due`. Conflating them would make `pushToTodoist`'s
-"already pushed, skip" guard block the topic's real first revision task
-forever. A partial unique index on `source_todoist_task_id` (`WHERE
-source_todoist_task_id IS NOT NULL`) backstops the application-level dedup
-check.
+### Inbound import (Todoist → Steady)
 
-**Imported topics land with `next_due` = tomorrow**, not today — an
-immediate same-day bounce-back for something just captured seconds ago
-would read as noise, not a considered schedule.
+`runInboundImport` scans `GET /tasks?label=STEADY_LABEL` (searched
+globally, not by project/section — the real account is 50 projects deep,
+several levels each, too varied for "watch one project" to be meaningful).
+For each returned task:
+- Already carries `REVISION_LABEL` → already tracked, skipped outright
+  (`continue`, not counted toward `succeeded`/`failed` — a no-op, not
+  a failure).
+- Doesn't carry it → fresh import candidate. Dedup-guarded via
+  `topics.source_todoist_task_id` (permanent, write-once provenance for
+  the *original capture task* — a partial unique index backstops this at
+  the DB level too). Inserts a new topic with `next_due` = tomorrow (IST;
+  an immediate same-day bounce-back for something just captured seconds
+  ago would read as noise, not a considered schedule — it only matters if
+  the task sits uncompleted, since a real review recomputes `next_due` via
+  SM-2 regardless), `source_todoist_task_id = task.id`, **and
+  `todoist_task_id = task.id`** — the task is *adopted* as the topic's own
+  currently-outstanding revision task rather than left `NULL`. This is
+  required for "any and all tasks linked to steady can be completed from
+  todoist" to hold on a topic's very first cycle — without it, the exact
+  task the user tagged could never itself register a completion. Then
+  `REVISION_LABEL` is added to the task via the same `POST /tasks/{id}`
+  labels-update call the old scheme used.
 
-**The original Todoist task is never completed or deleted — only the
-marker label is removed.** Its only job is "please also track this in
-Steady"; the task may have its own independent Todoist life (due date,
-other labels) that has nothing to do with being "done." Label removal
-happens even when the topic already exists (i.e. even on a re-seen,
-already-imported task) — so if label removal itself ever failed on a prior
-run after the topic was already created, the task self-heals on the next
-run instead of resurfacing in every future search forever.
+**Known, accepted limitation, not a new one**: if a pushed or adopted task
+is deleted in Todoist without ever being completed, `topics.todoist_task_id`
+is left pointing at a task that no longer exists, and nothing currently
+detects or clears this — the topic silently stops being push-eligible.
+This risk already existed for every normally-pushed task before this
+change; adopting import candidates the same way just extends it to a
+second task source, it isn't a new category of bug. A future enhancement
+could periodically `GET /tasks/{id}` for outstanding `todoist_task_id`s and
+clear-on-404, but that's out of scope here.
 
-Two real Todoist v1 endpoints this needed, both verified empirically
-against a real disposable test task (not assumed — same discipline as the
-REST v2 migration): `GET /tasks?label=X` returns `{results: [...],
-next_cursor}` (same wrapping convention as the projects-list endpoint) with
-each task's `labels` field as an array of label **name strings**; `POST
-/tasks/{id}` with a partial body (e.g. `{"labels": [...]}`) updates a task
-and returns a **plain, unwrapped** task object (matching task-creation's
-shape, not the list endpoints' wrapping).
+**Another inherent limitation, also not solved here**: `GET /tasks?label=X`
+only returns *active* tasks. If a task is tagged `steady` and completed
+before the daily cron ever runs, import never sees it (excluded from the
+active-task query) and no topic gets created — completion sync can't help
+either, since no topic exists yet to match against.
 
-## Todoist completion sync (Todoist → Steady, closing the review loop)
+### Completion sync (Todoist → Steady, closing the review loop)
 
-Steady pushes a "Review: X" task when a topic's due; until now, checking
-that task off in Todoist did nothing — reviewing still meant coming back to
-Steady's own UI. `runCompletionSync` (third cron operation, logged as
-`completion_sync` in `sync_log`) closes this: it finds completed Todoist
-tasks labelled `REVISION_LABEL` in a trailing 3-day window, matches them
-against topics via `todoist_task_id`, and applies a review automatically.
+`runCompletionSync` finds completed tasks carrying `STEADY_LABEL` (**not**
+`REVISION_LABEL` — "just revision label doesn't mean it goes to steady")
+in a trailing 3-day window, and matches them against topics via
+`todoist_task_id` equality (unchanged from the original design).
 
 **Quality comes from the task's most recent comment, parsed for a bare 0–5
-digit** (`/\b[0-5]\b/`); no comment, or nothing parseable, **defaults to
-quality 3** — SM-2's own minimum "successful recall" threshold, i.e. "did
-it, no complaint," rather than guessing generously or resetting progress.
-Considered and rejected: six new per-quality labels (`q0`–`q5`, more
-vocabulary pollution than one label costs the inbound-import feature, no
-real reliability gain over a comment + safe default) and Todoist's own
-P1–P4 priority field (already a live, actively-used, orthogonal meaning —
-task urgency — in the real account this was built against; would collide
-with its existing use and compress lossily onto a 0-5 scale anyway).
+digit** (`/\b[0-5]\b/`) — 0 meaning "didn't remember a single thing," 5
+meaning "remembered everything," the same scale Steady's own quality
+buttons already use.
 
-**`applyReview(env, topicId, quality)` is the one place review-recording
-logic lives** — extracted from `POST /api/topics/:id/review` so exactly one
-code path applies a review whether a user clicked a quality button or
-Todoist triggered it. The route is now a thin wrapper: validate the 0-5
-body, call `applyReview`, 404 if it returns null.
+**No digit found → no SM-2 update at all.** This replaced an earlier
+default-to-quality-3 behavior entirely, per explicit direction: "todoist
+tasks that will sync to steady have to have a number frm 0 to 5 mentioned
+in comments to that task before completion to be counted toward the actual
+SM-2 revision cycle data." Instead: the *same* task is reopened in place
+(`reopenTodoistTask` — `POST /tasks/{id}/reopen`, confirmed empirically to
+return `204`) and its due date reset to today (`POST /tasks/{id}` with
+`due_string: "today"`), and `topics.unconfirmed_completion_at` is set to a
+timestamp so the frontend can say a completion arrived with no confidence
+rating (see below). Considered and rejected: creating a *new* replacement
+task instead of reopening — the user was explicit that it should reappear
+"wherever it was, that same instant," and reopening the same task keeps it
+in its original project/section for free, with no duplicate-task clutter
+across repeated skipped cycles. This is self-correcting: a reopened task
+no longer appears in the completed-tasks endpoint on the next run, so
+there's no risk of ever reprocessing it before the user completes it
+again for real — confirmed live (a second `runCompletionSync` run against
+a just-reopened task returns `{succeeded: 0, failed: 0}`, not a repeat).
 
-**Clearing `topics.todoist_task_id` back to `NULL` after consuming a
-completion fixes a real dormant bug**: `pushToTodoist`'s "already pushed,
-skip" guard checked this column but nothing ever cleared it, so before this
-feature, a topic could only ever be pushed to Todoist **once in its entire
-life**, no matter how many future review cycles it went through. This also
-means a completion is only ever consumed once, so the fixed lookback window
-can safely re-see the same completed task on a later run without
-reprocessing it — no extra "already synced" tracking column needed.
+**A `*Xhrs Ymins` line in the task's description is read back as
+`minutes_spent`** — the reverse direction of `appendTimeToTodoistTask`'s
+own one-way write (last match wins if more than one such line exists).
+Confirmed empirically that the completed-tasks endpoint's response
+includes the full `description` field per item, not just summary fields.
+
+**Digit found → `applyReview(env, topic.id, quality, minutesSpent)`** — the
+same shared code path the `/review` route uses. No separate
+`todoist_task_id` clear is needed here anymore; see `applyReview` below.
 
 **The completed-tasks endpoint's own `label` query parameter does not
-actually filter** — confirmed empirically: a request with `label=revision`
+actually filter** — confirmed empirically: a request with a label param
 still returned unrelated completed tasks with empty `labels: []`. Labels
 are filtered client-side in JS instead. The endpoint also requires **both**
 `since` and `until` (a lone `since` 400s), and wraps its response in
@@ -423,12 +447,73 @@ follows the usual `{results: [...], next_cursor}` shape, each comment
 carrying `content` and `posted_at`; comments are sorted explicitly by
 `posted_at` in JS rather than trusting the API's implicit ordering.
 
-Verified end-to-end against three real disposable test topics (pushed for
-real, one completed with a "3" comment, one with no comment, one with a "5"
-comment) plus, unprompted, a genuinely orphaned topic left over from an
-earlier session's push test — all four were matched and reviewed
-correctly, proving the digit-parsing, the safe default, and the dedup-via-
-clearing all work against real data, not just crafted fixtures.
+### `applyReview` closes the Todoist task and clears state — for *every*
+### trigger, not just completion sync
+
+Asked directly whether reviewing a topic from Steady's own UI also
+completes the corresponding Todoist task, the honest answer used to be
+**no** — `applyReview` only ever appended the time-spent note; it never
+closed the task and never cleared `topics.todoist_task_id`. That meant a
+topic reviewed from Steady's UI could never be pushed a second time
+(`pushToTodoist`'s "already pushed, skip" guard checked that column
+forever) — the exact same class of bug already fixed for the
+completion-sync trigger specifically, just never fixed for the manual one.
+
+Fixed by centralizing in `applyReview` itself: its `UPDATE topics SET ...`
+now unconditionally also sets `todoist_task_id = NULL,
+unconfirmed_completion_at = NULL` (clearing an already-`NULL` column is
+harmless), and — best-effort, wrapped in try/catch, never blocking the
+SM-2 write itself — appends time-spent (unchanged) then calls
+`closeTodoistTask` (`POST /tasks/{id}/close`) if the topic had a live
+`todoist_task_id`. Completing an already-completed task (the
+completion-sync trigger, where the user closed it in Todoist themselves)
+is a harmless no-op — confirmed empirically by calling `/close` twice in a
+row on the same task (`204` both times). Net effect: `runCompletionSync`'s
+"digit found" branch no longer needs its own explicit clearing step —
+`applyReview` does it, one source of truth regardless of trigger.
+
+### Verification
+
+Every piece above (`/close`, `/reopen`, the completed-tasks endpoint's
+`description` field, the full unified label flow, the reopen-in-place
+no-digit path, and the `applyReview` Todoist-closing fix) was verified
+live against the real Todoist account and real production D1 — via
+disposable test tasks/topics created, exercised, and deleted/archived
+immediately after, and a temporary debug route fully reverted afterward
+(confirmed via `grep -i debug worker/index.js` returning nothing) — not
+assumed from the REST v2 conventions seen elsewhere in this file.
+
+## Per-topic review history (time spent + confidence, on the frontend)
+
+Steady already asked for and stored time-spent per review; the gap was
+pure display — no review history reached the frontend at all before this,
+online or offline. `GET /api/topics` now extends its existing
+reviews-join query (already there for `trajectory_note`) to also select
+`minutes_spent, reviewed_at`, attaching per topic:
+- `recent_reviews`: the last 6 reviews, newest-first, each
+  `{quality, minutes_spent, reviewed_at}`.
+- `total_minutes_spent`: summed across *all* of that topic's reviews (not
+  just the last 6) — left at `0` (falsy) if no review ever logged time,
+  so it stays invisible until earned, the same restraint already used for
+  `trajectory_note`.
+
+Rendered in `public/index.html` as a `.review-history` strip of small
+`.review-dot` circles (one per `recent_reviews` entry, color-coded by
+quality using only existing palette tokens — `--danger` low / `--accent-dim`
+mid / `--accent` high, no new colors), each with a `title` tooltip like
+"Jul 12 · Q4 · 25m". `total_minutes_spent`, when nonzero, joins the
+existing `metaBits` line (same place EF/review-count/project-name already
+render) as e.g. "3h 20m total".
+
+**Deliberately not extended to local/offline mode** — `localTopics`'
+`reviewLog` stays bare ISO-date strings (heatmap only); `recent_reviews`/
+`total_minutes_spent` are simply `undefined` there, so the rendering
+functions return `''`/skip silently. This is the same scope cut already
+made and documented for `trajectory_note`, not a new one — extending
+`reviewLog` to `{date, quality, minutes}` objects would make this a
+**fourth** hand-synced pair between the two files (alongside `nowIST()`,
+the SM-2 elapsed-time correction, and the category safe-archive guard),
+for a feature that's explicitly presentational.
 
 ## Time-tracking on review
 
@@ -446,7 +531,10 @@ case isn't special-cased — 40 minutes reads as `*0hrs 40mins`, following
 the literal format asked for rather than adding cleverness to omit the
 zero. This Todoist call is wrapped in try/catch and never blocks the
 review itself (the SM-2 update) from succeeding — annotating Todoist is a
-nice-to-have, the schedule update is not.
+nice-to-have, the schedule update is not. As of the unified label scheme
+above, this same value is also read back from Todoist's side (a
+`*Xhrs Ymins` line in a task's description) when completion sync applies a
+review, so time-tracking now flows in both directions, not just one.
 
 Local/offline mode does not currently send `minutes_spent` to Todoist
 (there's no Todoist to annotate offline anyway) — same "best effort,
@@ -465,8 +553,6 @@ Redeploy with `wrangler deploy` any time after code changes.
 
 ## Open decisions / things to ask about, don't assume
 
-- Whether the `revision` label is the one the user wants, or if they already
-  have a naming convention in Todoist for this kind of thing.
 - Whether topics need richer editing beyond archiving (currently DELETE just
   sets `archived = 1`). `POST /api/topics/:id/category` narrowly answers
   "can a topic's category be changed after creation" (yes, via the API) but

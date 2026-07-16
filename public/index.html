@@ -274,6 +274,12 @@
   .topic-title { font-size: 15px; }
   .topic-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
   .topic-insight { color: var(--text-dim); font-size: 12px; font-style: italic; margin-top: 2px; }
+  .topic-unconfirmed { color: var(--danger); opacity: 0.85; }
+  .review-history { display: flex; gap: 4px; margin-top: 4px; }
+  .review-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+  .review-dot.q-low { background: var(--danger); }
+  .review-dot.q-mid { background: var(--accent-dim); }
+  .review-dot.q-high { background: var(--accent); }
   .topic-due {
     font-family: Consolas, "Courier New", monospace;
     font-size: 12px; color: var(--text-dim);
@@ -969,6 +975,7 @@
     const statusClass = overdue ? 'status-overdue' : isToday ? 'status-today' : '';
     const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
     const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
+    if (t.total_minutes_spent) metaBits.push(`${formatMinutes(t.total_minutes_spent)} total`);
     if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
     const archiveControl = confirmingArchiveId === t.id
       ? `<div class="archive-confirm-row">
@@ -982,6 +989,8 @@
           <div class="topic-title">${escapeHtml(t.title)}</div>
           <div class="topic-meta">${metaBits.join(' · ')}</div>
           ${t.trajectory_note ? `<div class="topic-insight">${escapeHtml(t.trajectory_note)}</div>` : ''}
+          ${renderReviewHistory(t)}
+          ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">Completed in Todoist without a confidence rating — re-queued for review.</div>` : ''}
           <div class="quality-row" id="qrow-${t.id}">
             ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
           </div>
@@ -1045,6 +1054,31 @@
 
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // --- Per-topic review history (time spent + confidence per past review) -
+
+  function formatReviewDate(reviewedAt) {
+    // reviewed_at is SQLite's raw "YYYY-MM-DD HH:MM:SS" UTC (space, no zone) —
+    // same shape /api/sync-status already normalizes before parsing.
+    const d = new Date(reviewedAt.replace(' ', 'T') + 'Z');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  function qualityDotClass(q) {
+    return q <= 1 ? 'q-low' : q <= 3 ? 'q-mid' : 'q-high';
+  }
+  function formatMinutes(total) {
+    const h = Math.floor(total / 60), m = total % 60;
+    return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
+  }
+  function renderReviewHistory(t) {
+    if (!t.recent_reviews || !t.recent_reviews.length) return '';
+    const dots = t.recent_reviews.map((r) => {
+      const mins = r.minutes_spent != null ? ` · ${formatMinutes(r.minutes_spent)}` : '';
+      const title = `${formatReviewDate(r.reviewed_at)} · Q${r.quality}${mins}`;
+      return `<div class="review-dot ${qualityDotClass(r.quality)}" title="${escapeHtml(title)}"></div>`;
+    }).join('');
+    return `<div class="review-history">${dots}</div>`;
   }
 
   // --- Category manager UI -------------------------------------------------

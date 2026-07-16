@@ -20,11 +20,21 @@
  * Anything else falls through to the static assets binding (the frontend in /public).
  *
  * Scheduled (cron, see wrangler.toml): once a day, runs three operations in
- * sequence, each logged to sync_log independently via runOperation - (1)
- * pushes topics due today/overdue to Todoist, labelled REVISION_LABEL; (2)
- * imports any Todoist task labelled STEADY_IMPORT_LABEL as a new topic; (3)
- * syncs completed, REVISION_LABEL-tagged Todoist tasks back into Steady as
- * reviews (quality parsed from the task's latest comment, default 3).
+ * sequence, each logged to sync_log independently via runOperation.
+ * STEADY_LABEL (default "steady") is the one sync gate for both directions;
+ * REVISION_LABEL (default "review") means "there's already a live
+ * outstanding revision task for this topic". (1) pushes topics due
+ * today/overdue to Todoist, labelled both REVISION_LABEL and STEADY_LABEL.
+ * (2) imports any STEADY_LABEL task that does NOT yet carry REVISION_LABEL
+ * as a new topic, adopting that exact task as the topic's own
+ * todoist_task_id and adding REVISION_LABEL to it - a task already carrying
+ * REVISION_LABEL is already tracked and is skipped. (3) syncs completed
+ * STEADY_LABEL tasks back into Steady as reviews: a bare 0-5 digit in the
+ * task's latest comment is the confidence rating (no digit -> no SM-2
+ * change at all, the task is reopened in place and re-due today instead of
+ * a new one being created), and a "*Xhrs Ymins" line in the task's
+ * description is read back as minutes_spent. A task carrying only
+ * REVISION_LABEL (no STEADY_LABEL) is not synced by either direction.
  */
 
 // This app is single-user and that user is on IST (UTC+5:30, no DST) — see
@@ -176,7 +186,13 @@ function sm2(prev, quality, elapsedDays) {
  * topic doesn't exist. The one place review-application logic lives -
  * exactly one code path applies a review whether it's triggered by a user's
  * click in the Steady UI (the /review route below) or by the Todoist
- * completion-sync cron (runCompletionSync).
+ * completion-sync cron (runCompletionSync). Also the one place that clears
+ * topics.todoist_task_id/unconfirmed_completion_at after a review, so a
+ * topic reviewed via either trigger becomes push-eligible again the same
+ * way (previously only the completion-sync path cleared this column at
+ * all, so a topic reviewed from Steady's own UI could never be pushed a
+ * second time - the exact same class of bug already fixed for the other
+ * trigger, just not this one).
  */
 async function applyReview(env, id, quality, minutesSpent) {
   const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
@@ -191,7 +207,8 @@ async function applyReview(env, id, quality, minutesSpent) {
 
   await env.DB.batch([
     env.DB.prepare(
-      `UPDATE topics SET ef = ?, interval_days = ?, repetitions = ?, next_due = ?, last_reviewed = ? WHERE id = ?`
+      `UPDATE topics SET ef = ?, interval_days = ?, repetitions = ?, next_due = ?, last_reviewed = ?,
+                          todoist_task_id = NULL, unconfirmed_completion_at = NULL WHERE id = ?`
     ).bind(after.ef, after.interval_days, after.repetitions, after.next_due, todayISO(), id),
     env.DB.prepare(
       `INSERT INTO reviews (topic_id, quality, ef_before, ef_after, interval_before, interval_after,
@@ -203,14 +220,22 @@ async function applyReview(env, id, quality, minutesSpent) {
     ),
   ]);
 
-  // Best-effort only: annotating the Todoist task is a nice-to-have, and
-  // must never block the review itself (the SM-2 update above) from
-  // succeeding just because Todoist is unreachable or the task is gone.
-  if (minutesSpent != null && topic.todoist_task_id) {
+  // Best-effort only: neither Todoist side-effect should ever block the
+  // review itself (the SM-2 update above) from succeeding. Closing an
+  // already-completed task (the completion-sync trigger, where the user
+  // closed it in Todoist themselves) is expected to be a harmless no-op.
+  if (topic.todoist_task_id) {
+    if (minutesSpent != null) {
+      try {
+        await appendTimeToTodoistTask(env, topic.todoist_task_id, minutesSpent);
+      } catch (err) {
+        console.error(`Failed to append time-spent to Todoist task ${topic.todoist_task_id}: ${err}`);
+      }
+    }
     try {
-      await appendTimeToTodoistTask(env, topic.todoist_task_id, minutesSpent);
+      await closeTodoistTask(env, topic.todoist_task_id);
     } catch (err) {
-      console.error(`Failed to append time-spent to Todoist task ${topic.todoist_task_id}: ${err}`);
+      console.error(`Failed to close Todoist task ${topic.todoist_task_id}: ${err}`);
     }
   }
 
@@ -249,6 +274,46 @@ async function appendTimeToTodoistTask(env, taskId, minutesSpent) {
   }
 }
 
+// Marks a Todoist task complete. Called whenever applyReview() runs on a
+// topic with a live todoist_task_id, regardless of trigger - completing an
+// already-completed task (the completion-sync trigger, where the user
+// closed it in Todoist themselves) is a harmless no-op.
+async function closeTodoistTask(env, taskId) {
+  const res = await fetch(`https://api.todoist.com/api/v1/tasks/${taskId}/close`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to close Todoist task ${taskId}: ${res.status} ${await res.text()}`);
+  }
+}
+
+// Reopens a completed Todoist task and resets its due date to today.
+// Used by runCompletionSync when a completed task has no parseable
+// confidence digit - the same task reappears due today rather than a new
+// one being created, so nothing about which project/section it lived in
+// needs to be tracked or reconstructed.
+async function reopenTodoistTask(env, taskId) {
+  const reopenRes = await fetch(`https://api.todoist.com/api/v1/tasks/${taskId}/reopen`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
+  });
+  if (!reopenRes.ok) {
+    throw new Error(`Failed to reopen Todoist task ${taskId}: ${reopenRes.status} ${await reopenRes.text()}`);
+  }
+  const dueRes = await fetch(`https://api.todoist.com/api/v1/tasks/${taskId}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.TODOIST_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ due_string: "today" }),
+  });
+  if (!dueRes.ok) {
+    throw new Error(`Failed to reset due date for task ${taskId}: ${dueRes.status} ${await dueRes.text()}`);
+  }
+}
+
 async function handleApi(request, env, url) {
   const method = request.method;
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "topics", ...]
@@ -260,17 +325,26 @@ async function handleApi(request, env, url) {
     ).all();
 
     const { results: reviewRows } = await env.DB.prepare(
-      `SELECT r.topic_id, r.quality FROM reviews r
+      `SELECT r.topic_id, r.quality, r.minutes_spent, r.reviewed_at FROM reviews r
        JOIN topics t ON t.id = r.topic_id
        WHERE t.archived = 0
        ORDER BY r.topic_id, r.id ASC`
     ).all();
     const qualitiesByTopic = {};
+    const reviewsByTopic = {};
     for (const row of reviewRows) {
       (qualitiesByTopic[row.topic_id] ||= []).push(row.quality);
+      (reviewsByTopic[row.topic_id] ||= []).push(row);
     }
+    const RECENT_REVIEWS_LIMIT = 6;
     for (const topic of results) {
       topic.trajectory_note = classifyTrajectory(qualitiesByTopic[topic.id] || []);
+      const allReviews = reviewsByTopic[topic.id] || [];
+      topic.recent_reviews = allReviews
+        .slice(-RECENT_REVIEWS_LIMIT)
+        .reverse()
+        .map((r) => ({ quality: r.quality, minutes_spent: r.minutes_spent, reviewed_at: r.reviewed_at }));
+      topic.total_minutes_spent = allReviews.reduce((sum, r) => sum + (r.minutes_spent || 0), 0);
     }
 
     return jsonResponse(results);
@@ -616,7 +690,11 @@ async function pushToTodoist(env, topic) {
     body: JSON.stringify({
       content: `Review: ${topic.title}`,
       project_id: projectId,
-      labels: [env.REVISION_LABEL || "revision"],
+      // "review" means "there's a live outstanding revision task for this
+      // topic"; "steady" is the actual sync gate for both directions - any
+      // task Steady has ever touched can be found by that one label,
+      // independent of push/import.
+      labels: [env.REVISION_LABEL || "review", env.STEADY_LABEL || "steady"],
       due_string: "today",
     }),
   });
@@ -636,29 +714,35 @@ async function pushToTodoist(env, topic) {
 }
 
 /**
- * Imports any Todoist task carrying STEADY_IMPORT_LABEL as a new Steady
- * topic, searched globally (not by project/section — the user's real
- * Todoist tree is too deep/varied for that to be a meaningful scope).
+ * Imports any Todoist task carrying STEADY_LABEL but NOT yet REVISION_LABEL
+ * as a new Steady topic, searched globally (not by project/section — the
+ * user's real Todoist tree is too deep/varied for that to be a meaningful
+ * scope). A task that already carries REVISION_LABEL is already tracked
+ * (either a normally-pushed task, or one this function already adopted on
+ * a prior run) and is skipped outright - "revision label if already there,
+ * great, else steady assigns it."
  *
  * source_todoist_task_id is permanent write-once provenance/dedup for the
- * *original* capture task, deliberately separate from todoist_task_id
- * (the current cycle's outstanding *revision* task, which starts NULL here
- * and gets populated normally the first time pushToTodoist fires on this
- * topic's real next_due) - conflating them would make pushToTodoist's
- * "already pushed, skip" guard block the topic's real first revision task.
+ * *original* capture task. todoist_task_id is set to that SAME task's id
+ * at import time (not left NULL) - the task is adopted as the topic's own
+ * currently-outstanding revision task, which is what makes "any and all
+ * tasks linked to steady can be completed from todoist" true on a topic's
+ * very first cycle, not just from its second cycle onward.
  *
  * next_due is tomorrow, not today: an immediate same-day bounce-back for
  * something just captured seconds ago would read as noise, not a
- * considered schedule.
+ * considered schedule - it only matters if the task sits uncompleted,
+ * since a real completion recomputes next_due via SM-2 regardless.
  *
- * The original task keeps existing after import - only the marker label
- * is removed (confirmation the task's "please track this in Steady" job
- * is done), since the task may have its own independent Todoist life
+ * The original task keeps existing after import - REVISION_LABEL is added
+ * to it (never removed, unlike the old STEADY_IMPORT_LABEL scheme this
+ * replaces), since the task may have its own independent Todoist life
  * (due date, other labels) unrelated to being "done".
  */
 async function runInboundImport(env) {
-  const label = env.STEADY_IMPORT_LABEL || "steady-import";
-  const res = await fetch(`https://api.todoist.com/api/v1/tasks?label=${encodeURIComponent(label)}`, {
+  const steadyLabel = env.STEADY_LABEL || "steady";
+  const revisionLabel = env.REVISION_LABEL || "review";
+  const res = await fetch(`https://api.todoist.com/api/v1/tasks?label=${encodeURIComponent(steadyLabel)}`, {
     headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
   });
   if (!res.ok) {
@@ -674,30 +758,31 @@ async function runInboundImport(env) {
   let failed = 0;
   for (const task of results) {
     try {
+      const labels = task.labels || [];
+      // "revision label if already there, great" - already tracked, no action.
+      if (labels.includes(revisionLabel)) continue;
+
+      // Fresh import candidate. Dedup guard first - self-heals a prior
+      // run's label-add failure without re-inserting the topic.
       const existing = await env.DB.prepare(
         `SELECT 1 FROM topics WHERE source_todoist_task_id = ?`
       ).bind(task.id).first();
-      // Label removal always runs below, even if already imported - so a
-      // prior run's label-removal failure (topic created, but the label
-      // stuck around) self-heals on the next run instead of persisting
-      // forever and resurfacing in every future search.
       if (!existing) {
         await env.DB.prepare(
-          `INSERT INTO topics (title, next_due, source_todoist_task_id) VALUES (?, ?, ?)`
-        ).bind(task.content, nextDue, task.id).run();
+          `INSERT INTO topics (title, next_due, source_todoist_task_id, todoist_task_id) VALUES (?, ?, ?, ?)`
+        ).bind(task.content, nextDue, task.id, task.id).run();
       }
 
-      const remainingLabels = (task.labels || []).filter((l) => l !== label);
       const updateRes = await fetch(`https://api.todoist.com/api/v1/tasks/${task.id}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${env.TODOIST_API_TOKEN}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ labels: remainingLabels }),
+        body: JSON.stringify({ labels: [...labels, revisionLabel] }),
       });
       if (!updateRes.ok) {
-        throw new Error(`Failed to remove import label from task ${task.id}: ${updateRes.status} ${await updateRes.text()}`);
+        throw new Error(`Failed to add revision label to task ${task.id}: ${updateRes.status} ${await updateRes.text()}`);
       }
       succeeded++;
     } catch (err) {
@@ -709,27 +794,34 @@ async function runInboundImport(env) {
 }
 
 /**
- * Syncs completed Todoist tasks back into Steady as reviews. For each
- * completed task matching a topic's todoist_task_id, reads the task's most
- * recent comment (added since the task was created - inherently scoped,
- * since each review cycle's task is freshly created and never reused),
- * parses a bare 0-5 digit out of it, and defaults to quality 3 ("did it, no
- * complaint" - SM-2's own minimum "successful recall" threshold) if the
- * comment is missing or unparseable. Applies the review via the same
- * applyReview() the /review route uses - exactly one code path applies a
- * review regardless of whether a user clicked or Todoist triggered it.
+ * Syncs completed Todoist tasks back into Steady as reviews. Filters on
+ * STEADY_LABEL, not REVISION_LABEL - "just revision label doesn't mean it
+ * goes to steady" - then matches a topic via todoist_task_id equality
+ * (unchanged). For each matched completion, reads the task's most recent
+ * comment (added since the task was created - inherently scoped, since
+ * each review cycle's task is freshly created and never reused) for a
+ * bare 0-5 confidence digit, and its description for a "*Xhrs Ymins" line
+ * (the reverse direction of appendTimeToTodoistTask's own write) for
+ * minutes_spent.
  *
- * Clears todoist_task_id back to NULL after consuming a completion - this
- * is what makes the topic push-eligible again on its next due date
- * (pushToTodoist's "already pushed, skip" guard checks this column), fixing
- * a real dormant bug: without this, a topic could only ever be pushed once
- * in its entire life, no matter how many future review cycles it went
- * through. It also means a completion is only ever consumed once - the
- * fixed lookback window below can safely re-see the same completed task on
- * a later run without reprocessing it.
+ * A digit found -> applyReview() records the real review (the same shared
+ * code path the /review route uses) and, as of that function's own
+ * change, clears todoist_task_id/unconfirmed_completion_at itself - no
+ * extra bookkeeping needed here.
+ *
+ * No digit found -> SM-2 state must stay completely untouched (dropping
+ * the old default-to-quality-3 behavior entirely). Rather than creating a
+ * new task - which would need to resolve/preserve which project the
+ * original lived in, and would pile up duplicates across repeated skipped
+ * cycles - the SAME task is reopened and re-dued today via
+ * reopenTodoistTask(), and unconfirmed_completion_at is set so the
+ * frontend can say a completion arrived with no confidence rating. This
+ * is self-correcting for free: a reopened task no longer appears in the
+ * completed-tasks endpoint on the next run, so there's no risk of
+ * reprocessing it before the user completes it again for real.
  */
 async function runCompletionSync(env) {
-  const label = env.REVISION_LABEL || "revision";
+  const steadyLabel = env.STEADY_LABEL || "steady";
   // A generous fixed window (not derived from sync_log's last-successful-run
   // timestamp - that would couple this feature's correctness to another
   // table's data existing/being well-formed) so a missed cron run still
@@ -746,8 +838,8 @@ async function runCompletionSync(env) {
   const { items } = await res.json();
   // This endpoint's own `label` query param does NOT actually filter
   // (confirmed empirically - unrelated completed tasks came back even when
-  // passing label=revision), so labels are filtered here in JS instead.
-  const labeled = items.filter((item) => (item.labels || []).includes(label));
+  // passing a label), so labels are filtered here in JS instead.
+  const labeled = items.filter((item) => (item.labels || []).includes(steadyLabel));
 
   let succeeded = 0;
   let failed = 0;
@@ -756,7 +848,7 @@ async function runCompletionSync(env) {
       const topic = await env.DB.prepare(
         `SELECT * FROM topics WHERE todoist_task_id = ?`
       ).bind(task.id).first();
-      if (!topic) continue; // not a task Steady pushed, or already resolved - not a failure
+      if (!topic) continue; // not a task Steady is currently tracking - not a failure
 
       const commentsRes = await fetch(`https://api.todoist.com/api/v1/comments?task_id=${task.id}`, {
         headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
@@ -768,11 +860,26 @@ async function runCompletionSync(env) {
       comments.sort((a, b) => Date.parse(a.posted_at) - Date.parse(b.posted_at)); // don't trust implicit ordering
       const latest = comments.length ? comments[comments.length - 1] : null;
       const match = latest ? latest.content.match(/\b[0-5]\b/) : null;
-      const quality = match ? Number(match[0]) : 3;
 
-      const updated = await applyReview(env, topic.id, quality);
-      if (!updated) throw new Error(`applyReview returned nothing for topic ${topic.id}`);
-      await env.DB.prepare(`UPDATE topics SET todoist_task_id = NULL WHERE id = ?`).bind(topic.id).run();
+      let minutesSpent = null;
+      if (task.description) {
+        const timeMatches = [...task.description.matchAll(/\*(\d+)hrs\s+(\d+)mins/g)];
+        if (timeMatches.length) {
+          const [, h, m] = timeMatches[timeMatches.length - 1]; // last match wins
+          minutesSpent = Number(h) * 60 + Number(m);
+        }
+      }
+
+      if (match) {
+        const quality = Number(match[0]);
+        const updated = await applyReview(env, topic.id, quality, minutesSpent);
+        if (!updated) throw new Error(`applyReview returned nothing for topic ${topic.id}`);
+      } else {
+        await reopenTodoistTask(env, task.id);
+        await env.DB.prepare(
+          `UPDATE topics SET unconfirmed_completion_at = datetime('now') WHERE id = ?`
+        ).bind(topic.id).run();
+      }
       succeeded++;
     } catch (err) {
       console.error(`runCompletionSync failed for task ${task.id}: ${err}`);
