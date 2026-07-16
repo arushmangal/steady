@@ -104,6 +104,18 @@
     padding: 0; font-size: 13px; cursor: pointer;
   }
   .undo-toast button:hover { filter: none; transform: none; box-shadow: none; text-decoration: underline; }
+  .time-prompt {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; color: var(--text);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    display: flex; align-items: center; gap: 8px; z-index: 100;
+  }
+  .time-prompt input[type="number"] {
+    width: 52px; background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 8px; border-radius: 6px; font-size: 13px;
+  }
+  .time-prompt button { padding: 6px 12px; font-size: 13px; }
 
   /* Calendar: forward-looking due dates */
   .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
@@ -382,6 +394,14 @@
 </div>
 
 <div class="undo-toast" id="undoToast" style="display:none"></div>
+
+<div class="time-prompt" id="timePrompt" style="display:none">
+  <span>Time spent?</span>
+  <input type="number" id="timeHours" min="0" placeholder="hrs" />
+  <input type="number" id="timeMins" min="0" max="59" placeholder="mins" />
+  <button type="button" id="timeLogBtn">Log</button>
+  <button type="button" id="timeSkipBtn" class="ghost">Skip</button>
+</div>
 
 <script>
   // Same-origin API served by the Worker. Falls back to localStorage if
@@ -835,11 +855,11 @@
   // lifetime — nothing here needs to survive a reload).
   let lastLocalUndoSnapshot = null; // { topicId, ef, interval_days, repetitions, next_due, last_reviewed }
 
-  async function reviewTopic(id, quality) {
+  async function reviewTopic(id, quality, minutesSpent) {
     if (!useLocal) {
       try { return await apiFetch(`/topics/${id}/review`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quality }),
+        body: JSON.stringify({ quality, minutes_spent: minutesSpent ?? undefined }),
       }); } catch (e) { /* fall through */ }
     }
     const topic = localTopics.find((t) => t.id === id);
@@ -892,6 +912,39 @@
     };
     undoToastTimer = setTimeout(() => { toast.style.display = 'none'; }, 6000);
   }
+
+  // Quality is picked first (by click or keyboard), then this prompt asks
+  // how long the revision took before the review actually gets recorded -
+  // skippable, since not every review is worth timing.
+  let pendingReview = null; // { topicId, quality }
+
+  function showTimePrompt(topicId, quality) {
+    pendingReview = { topicId, quality };
+    document.getElementById('timeHours').value = '';
+    document.getElementById('timeMins').value = '';
+    document.getElementById('timePrompt').style.display = '';
+    document.getElementById('timeHours').focus();
+  }
+
+  async function finishPendingReview(minutesSpent) {
+    if (!pendingReview) return;
+    const { topicId, quality } = pendingReview;
+    pendingReview = null;
+    document.getElementById('timePrompt').style.display = 'none';
+    await reviewTopic(topicId, quality, minutesSpent);
+    showUndoToast(topicId, quality);
+    refresh();
+  }
+
+  document.getElementById('timeLogBtn').addEventListener('click', () => {
+    const h = Number(document.getElementById('timeHours').value) || 0;
+    const m = Number(document.getElementById('timeMins').value) || 0;
+    finishPendingReview(h * 60 + m);
+  });
+  document.getElementById('timeSkipBtn').addEventListener('click', () => finishPendingReview(null));
+  document.getElementById('timePrompt').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('timeLogBtn').click();
+  });
 
   function renderHeatmap(days) {
     const heatmap = document.getElementById('heatmap');
@@ -1206,9 +1259,7 @@
     const id = e.target.dataset.id;
     const q = Number(e.target.dataset.q);
     const topicId = useLocal ? Number(id) : id;
-    await reviewTopic(topicId, q);
-    showUndoToast(topicId, q);
-    refresh();
+    showTimePrompt(topicId, q);
   });
 
   document.getElementById('topicList').addEventListener('click', async (e) => {
@@ -1245,9 +1296,7 @@
     const id = e.target.dataset.id;
     if (q !== undefined) {
       const topicId = useLocal ? Number(id) : id;
-      await reviewTopic(topicId, Number(q));
-      showUndoToast(topicId, Number(q));
-      refresh();
+      showTimePrompt(topicId, Number(q));
     }
   });
 

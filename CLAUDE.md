@@ -430,6 +430,29 @@ earlier session's push test — all four were matched and reviewed
 correctly, proving the digit-parsing, the safe default, and the dedup-via-
 clearing all work against real data, not just crafted fixtures.
 
+## Time-tracking on review
+
+After picking a quality rating (by click or keyboard), a small inline
+prompt ("Time spent? [hrs] [mins] Log / Skip") asks how long the revision
+took before the review is actually recorded — skippable, since not every
+review is worth timing. `reviews.minutes_spent` is nullable for exactly
+this reason. When a value is given and the topic has a live
+`todoist_task_id`, `appendTimeToTodoistTask` appends `*Xhrs Ymins` as a new
+line on that Todoist task's description — **appended, not overwritten**,
+since the task may carry notes the user added by hand (confirmed
+empirically: reviewing the same still-open task twice produced two
+distinct `*Xhrs Ymins` lines, not one overwriting the other). The zero
+case isn't special-cased — 40 minutes reads as `*0hrs 40mins`, following
+the literal format asked for rather than adding cleverness to omit the
+zero. This Todoist call is wrapped in try/catch and never blocks the
+review itself (the SM-2 update) from succeeding — annotating Todoist is a
+nice-to-have, the schedule update is not.
+
+Local/offline mode does not currently send `minutes_spent` to Todoist
+(there's no Todoist to annotate offline anyway) — same "best effort,
+skip gracefully" posture already used for sync-status and the trajectory
+note.
+
 ## Deployment
 
 Live as a single Cloudflare Worker (D1-backed, static assets served from

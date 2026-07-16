@@ -59,7 +59,13 @@ CREATE TABLE IF NOT EXISTS reviews (
   -- last_reviewed_before is also NULL but for a real reason)
   repetitions_before   INTEGER,
   next_due_before      TEXT,
-  last_reviewed_before TEXT
+  last_reviewed_before TEXT,
+
+  -- How long the revision actually took, in minutes. Optional (nullable) —
+  -- prompted at review time but skippable. When set and the topic has a
+  -- live todoist_task_id, gets appended to that task's Todoist description
+  -- as "*Xhrs Ymins".
+  minutes_spent INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_topics_next_due ON topics(next_due);
