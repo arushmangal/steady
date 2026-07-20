@@ -16,7 +16,7 @@ due-today revisions into Todoist so you actually get notified.
 - **Todoist API v1** (`api.todoist.com/api/v1`) — daily cron (23:30 UTC /
   5:00 AM IST) runs three operations, each independently logged so a
   failure in one doesn't hide the others: (1) pushes topics due today or
-  overdue into Todoist as tasks, tagged with both a `review` label (an
+  overdue into Todoist as P1 tasks, tagged with both a `review` label (an
   outstanding revision task) and a `steady` label (the actual sync gate —
   required, both directions, for a task to be Steady's business at all) —
   each topic can target its own Todoist project (picked from a dropdown in

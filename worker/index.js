@@ -26,7 +26,8 @@
  * STEADY_LABEL (default "steady") is the one sync gate for both directions;
  * REVISION_LABEL (default "review") means "there's already a live
  * outstanding revision task for this topic". (1) pushes topics due
- * today/overdue to Todoist, labelled both REVISION_LABEL and STEADY_LABEL.
+ * today/overdue to Todoist, labelled both REVISION_LABEL and STEADY_LABEL,
+ * at priority 4 (Todoist's API value for the UI's "P1", its highest).
  * (2) imports any STEADY_LABEL task that does NOT yet carry REVISION_LABEL
  * as a new topic, adopting that exact task as the topic's own
  * todoist_task_id and adding REVISION_LABEL to it - a task already carrying
@@ -748,6 +749,11 @@ async function pushToTodoist(env, topic) {
       // independent of push/import.
       labels: [env.REVISION_LABEL || "review", env.STEADY_LABEL || "steady"],
       due_string: "today",
+      // Todoist's API inverts the UI label: priority 4 is what the UI shows
+      // as "P1" (highest), 1 is "P4" (default/lowest). Every pushed revision
+      // task is P1 so it's never lost among a project's other, unrelated
+      // tasks.
+      priority: 4,
     }),
   });
 
