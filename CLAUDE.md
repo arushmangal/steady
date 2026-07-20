@@ -382,6 +382,12 @@ steady assigns it. just revision label doesn't mean it goes to steady."
   lowest a naive reading of the number might suggest. Not configurable via
   an env var (unlike the labels) — there was no request for anything other
   than "always P1," so this doesn't invent a knob nothing asked for.
+  Confirmed live by pushing a disposable test topic and reading the
+  created task straight back from the real API: `"priority":4`. (A user
+  report that pushed tasks "aren't P1" turned out to be a downstream
+  symptom of the deleted-task bug documented below, not a problem with
+  this value itself — a topic whose old task was silently never re-pushed
+  obviously never got a fresh, correctly-prioritized one either.)
 
 ### Inbound import (Todoist → Steady)
 
@@ -408,15 +414,34 @@ For each returned task:
   `REVISION_LABEL` is added to the task via the same `POST /tasks/{id}`
   labels-update call the old scheme used.
 
-**Known, accepted limitation, not a new one**: if a pushed or adopted task
-is deleted in Todoist without ever being completed, `topics.todoist_task_id`
-is left pointing at a task that no longer exists, and nothing currently
-detects or clears this — the topic silently stops being push-eligible.
-This risk already existed for every normally-pushed task before this
-change; adopting import candidates the same way just extends it to a
-second task source, it isn't a new category of bug. A future enhancement
-could periodically `GET /tasks/{id}` for outstanding `todoist_task_id`s and
-clear-on-404, but that's out of scope here.
+**Fixed 2026-07-20** (previously an accepted, documented limitation here):
+if a pushed or adopted task was deleted in Todoist without ever being
+completed, `topics.todoist_task_id` stayed pointing at a task that no
+longer existed, and nothing detected or cleared it — the topic silently
+stopped being push-eligible forever. This risk applied to every
+normally-pushed task, not just adopted import candidates.
+
+`pushToTodoist` now checks the existing task before trusting the "already
+pushed" guard (real bug report: "push now doesn't push every task... if
+that task gets deleted in todoist, [it] doesn't register that the task was
+deleted and doesn't re push it"). **The check is not a plain
+`GET /tasks/{id}` status code check** — confirmed live by actually
+deleting a real test task and inspecting the response: Todoist soft-deletes
+tasks, so `GET /tasks/{id}` on a deleted task returns `200 OK` with
+`is_deleted: true` in the body, not a 404. A naive `res.ok` check would have
+silently kept this exact bug alive (an early version of this fix,
+written before live-testing, did exactly that and would have shipped
+broken). The real check: `res.ok` **and** `!body.is_deleted` means the
+task is genuinely still there (skip, as before); a 404 *or* `is_deleted:
+true` both mean it's gone — clear `todoist_task_id` to `NULL` and fall
+through to push a fresh task; any other non-OK response (network blip,
+transient 5xx) is treated as a failed push rather than a guess either way,
+so it's retried next run instead of risking a duplicate task. Verified
+live end-to-end: pushed a disposable test topic, deleted its task via the
+real API, ran push-now again, confirmed a *new* task id was assigned (and
+carried the correct P1 priority — see below), then confirmed a second
+push-now against the still-live replacement task does *not* create a
+third one.
 
 **Another inherent limitation, also not solved here**: `GET /tasks?label=X`
 only returns *active* tasks. If a task is tagged `steady` and completed
