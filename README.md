@@ -21,9 +21,13 @@ due-today revisions into Todoist so you actually get notified.
   required, both directions, for a task to be Steady's business at all) —
   each topic can target its own Todoist project (picked from a dropdown in
   the UI — shown indented by Todoist's real project/sub-project hierarchy,
-  backed by `GET /api/todoist/projects`), failing that its category's own
-  override, then the nearest ancestor category's override, then the
-  default `TODOIST_PROJECT_ID` project; (2) imports any `steady`-tagged
+  backed by `GET /api/todoist/projects` — and editable after creation too,
+  via a small "→ ProjectName" control under the topic), failing that its
+  category's own override, then the nearest ancestor category's override,
+  then the default `TODOIST_PROJECT_ID` project; pushed tasks also carry a
+  description spelling out the completion contract (comment a 0–5 digit
+  before completing, or it just reopens) right on the task itself; (2)
+  imports any `steady`-tagged
   task that doesn't yet carry `review` as a new Steady topic, adopting
   that same task as its first outstanding revision task; (3) syncs
   completed `steady`-tagged tasks back into Steady as reviews — a bare 0–5
@@ -35,7 +39,8 @@ due-today revisions into Todoist so you actually get notified.
   the same task and clears it for the next cycle, so it can only ever be
   reviewed once per cycle regardless of which side triggered it. A
   "Last sync: N pushed, N failed" line in the UI surfaces the cron's own
-  health
+  health, next to a "Push now" button that runs just the push operation
+  immediately instead of waiting for the daily cron
 - A forward-looking, clickable calendar (review directly from a due day)
   and a 28-day activity heatmap, alongside the flat/grouped topic list
 - Each topic gets a short, plain-language read on its recent review
@@ -171,5 +176,10 @@ date), and complete a tagged task with a 0–5 confidence comment to log its
 review automatically — no comment means no schedule change, just a
 reopened task and a visible note on the topic. Reviewing from Steady's own
 UI closes the Todoist side too, so either direction can start or finish a
-review cycle. See `CLAUDE.md` for the full design and the real-API quirks
+review cycle. Pushed tasks also spell out that completion contract right
+on the task's own description, and a "Push now" button runs the push
+operation on demand instead of waiting for the daily cron — useful right
+after changing a topic's Todoist project override, which is itself now
+editable after creation (not just at add-time) from a small control under
+each topic. See `CLAUDE.md` for the full design and the real-API quirks
 (undocumented, found by testing) each one turned up.

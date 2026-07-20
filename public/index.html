@@ -91,7 +91,13 @@
     box-shadow: 0 0 10px rgba(240,180,41,0.5);
   }
   .heatmap-label { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; justify-content: space-between; }
-  .sync-status { color: var(--text-dim); font-size: 11px; margin-top: 10px; }
+  .sync-status { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .push-now-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  }
+  .push-now-btn:hover { border-color: var(--accent-dim); color: var(--text); filter: none; transform: none; box-shadow: none; }
+  .push-now-btn:disabled { opacity: 0.5; cursor: default; }
   .undo-toast {
     position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
@@ -282,6 +288,9 @@
   .review-dot.q-low { background: var(--danger); }
   .review-dot.q-mid { background: var(--accent-dim); }
   .review-dot.q-high { background: var(--accent); }
+  .topic-project-row { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .topic-project-hint { color: var(--text-dim); font-size: 12px; cursor: pointer; }
+  .topic-project-hint:hover { color: var(--accent); }
   .topic-due {
     font-family: Consolas, "Courier New", monospace;
     font-size: 12px; color: var(--text-dim);
@@ -361,7 +370,10 @@
     <div class="heatmap" id="heatmap"></div>
     <div class="heatmap-label"><span>28 days ago</span><span>today</span></div>
     <div class="scrawl" id="dailyQuote"></div>
-    <div class="sync-status" id="syncStatus"></div>
+    <div class="sync-status" id="syncStatus">
+      <span id="syncStatusText"></span>
+      <button type="button" class="push-now-btn" id="pushNowBtn" style="display:none">Push now</button>
+    </div>
   </div>
 
   <div class="panel cal-panel">
@@ -688,22 +700,44 @@
   }
 
   function renderSyncStatus(status) {
-    const el = document.getElementById('syncStatus');
-    if (!status) { el.innerHTML = ''; return; }
-    const push = status.push;
-    if (!push) { el.innerHTML = ''; return; }
-    const warn = !push.ok || push.stale || push.failed > 0;
-    const timeAgo = (() => {
-      const ms = Date.now() - Date.parse(push.run_at.replace(' ', 'T') + 'Z');
-      const hours = Math.round(ms / 3600000);
-      if (hours < 1) return 'just now';
-      if (hours < 24) return `${hours}h ago`;
-      return `${Math.round(hours / 24)}d ago`;
-    })();
-    const label = !push.ok
-      ? `Last sync failed · ${timeAgo}`
-      : `Last sync: ${push.succeeded} pushed${push.failed ? `, ${push.failed} failed` : ''} · ${timeAgo}`;
-    el.innerHTML = `<span style="${warn ? 'color:var(--danger)' : ''}">${escapeHtml(label)}</span>`;
+    const textEl = document.getElementById('syncStatusText');
+    const push = status && status.push;
+    if (!push) {
+      textEl.innerHTML = '';
+    } else {
+      const warn = !push.ok || push.stale || push.failed > 0;
+      const timeAgo = (() => {
+        const ms = Date.now() - Date.parse(push.run_at.replace(' ', 'T') + 'Z');
+        const hours = Math.round(ms / 3600000);
+        if (hours < 1) return 'just now';
+        if (hours < 24) return `${hours}h ago`;
+        return `${Math.round(hours / 24)}d ago`;
+      })();
+      const label = !push.ok
+        ? `Last sync failed · ${timeAgo}`
+        : `Last sync: ${push.succeeded} pushed${push.failed ? `, ${push.failed} failed` : ''} · ${timeAgo}`;
+      textEl.innerHTML = `<span style="${warn ? 'color:var(--danger)' : ''}">${escapeHtml(label)}</span>`;
+    }
+    // No real backend to push to in local/offline mode, or if the
+    // sync-status fetch itself couldn't reach the API (status is null).
+    document.getElementById('pushNowBtn').style.display = (useLocal || !status) ? 'none' : '';
+  }
+
+  async function pushNow() {
+    const btn = document.getElementById('pushNowBtn');
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Pushing…';
+    try {
+      const result = await apiPost('/push-now', 'POST');
+      if (result.ok) {
+        renderSyncStatus({ push: result.data });
+        await refresh();
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
   }
 
   async function addTopic(title, todoistProjectId, categoryId) {
@@ -740,6 +774,13 @@
     const topic = localTopics.find((t) => t.id === id);
     if (topic) { topic.category_id = categoryId ? Number(categoryId) : null; saveLocal(); }
     return { ok: true };
+  }
+
+  // No local-mode fallback — the editing UI itself (renderProjectEdit) is
+  // already hidden whenever useLocal is true, since there's no real Todoist
+  // to resolve a project override against offline.
+  async function setTopicProject(id, projectId) {
+    return apiPost(`/topics/${id}/project`, 'POST', { todoist_project_id: projectId || undefined });
   }
 
   // --- Categories ---------------------------------------------------------
@@ -969,6 +1010,27 @@
   let lastTopics = [];
   let lastCategories = [];
   let confirmingArchiveId = null;
+  let editingProjectTopicId = null;
+
+  /**
+   * The topic's own Todoist project override — the one resolveTodoistProjectId
+   * checks first, winning outright over any category-level override (see
+   * that function's doc comment in worker/index.js). Not shown/editable
+   * offline (useLocal) or before the Todoist project list has loaded, same
+   * gating the add-topic project picker itself already uses.
+   */
+  function renderProjectEdit(t, projectName) {
+    if (useLocal || !todoistProjects || !todoistProjects.length) return '';
+    if (editingProjectTopicId === t.id) {
+      const options = '<option value="">No override (use category/default)</option>' + projectOptionsHtml(todoistProjects, t.todoist_project_id);
+      return `<div class="topic-project-row">
+        <select class="project-picker topic-edit-project">${options}</select>
+        <button type="button" class="ghost" data-save-project="${t.id}">Save</button>
+        <button type="button" class="ghost" data-cancel-edit-project="${t.id}">Cancel</button>
+      </div>`;
+    }
+    return `<div class="topic-project-row"><span class="topic-project-hint" data-edit-project="${t.id}">${projectName ? `→ ${escapeHtml(projectName)}` : 'Set Todoist project override'}</span></div>`;
+  }
 
   function renderTopicRow(t, today) {
     const overdue = t.next_due < today;
@@ -979,7 +1041,6 @@
     const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
     const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
     if (t.total_minutes_spent) metaBits.push(`${formatMinutes(t.total_minutes_spent)} total`);
-    if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
     const archiveControl = confirmingArchiveId === t.id
       ? `<div class="archive-confirm-row">
            <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Delete?</button>
@@ -991,6 +1052,7 @@
         <div style="flex:1">
           <div class="topic-title">${escapeHtml(t.title)}</div>
           <div class="topic-meta">${metaBits.join(' · ')}</div>
+          ${renderProjectEdit(t, projectName)}
           ${t.trajectory_note ? `<div class="topic-insight">${escapeHtml(t.trajectory_note)}</div>` : ''}
           ${renderReviewHistory(t)}
           ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">Completed in Todoist without a confidence rating — re-queued for review.</div>` : ''}
@@ -1172,6 +1234,7 @@
 
   document.getElementById('dailyQuote').textContent = dailyQuote();
   loadSyncStatus().then(renderSyncStatus);
+  document.getElementById('pushNowBtn').addEventListener('click', pushNow);
 
   document.getElementById('addForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1327,6 +1390,27 @@
       // open row" is ambiguous for the 0-5 keyboard shortcut below.
       document.querySelectorAll('.quality-row.open').forEach((r) => r.classList.remove('open'));
       if (opening) row.classList.add('open');
+      return;
+    }
+    const editProjectEl = e.target.closest('[data-edit-project]');
+    if (editProjectEl) {
+      editingProjectTopicId = Number(editProjectEl.dataset.editProject);
+      renderTopics(lastTopics);
+      return;
+    }
+    const cancelProjectEl = e.target.closest('[data-cancel-edit-project]');
+    if (cancelProjectEl) {
+      editingProjectTopicId = null;
+      renderTopics(lastTopics);
+      return;
+    }
+    const saveProjectEl = e.target.closest('[data-save-project]');
+    if (saveProjectEl) {
+      const id = Number(saveProjectEl.dataset.saveProject);
+      const select = saveProjectEl.closest('.topic-project-row').querySelector('.topic-edit-project');
+      await setTopicProject(id, select.value);
+      editingProjectTopicId = null;
+      refresh();
       return;
     }
     const q = e.target.dataset.q;
