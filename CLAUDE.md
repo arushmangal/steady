@@ -375,6 +375,13 @@ steady assigns it. just revision label doesn't mean it goes to steady."
   by either direction at all — confirmed live: tagging a task `review`-only
   and completing it is silently ignored by both `runInboundImport` and
   `runCompletionSync`.
+- **As of 2026-07-20, every task `pushToTodoist` creates is priority 4** —
+  Todoist's API inverts the UI's label, where priority 4 is what the UI
+  shows as "P1" (highest) and 1 is "P4" (default/lowest), so a hardcoded
+  `4` in the request body is the highest priority Todoist has, not the
+  lowest a naive reading of the number might suggest. Not configurable via
+  an env var (unlike the labels) — there was no request for anything other
+  than "always P1," so this doesn't invent a knob nothing asked for.
 
 ### Inbound import (Todoist → Steady)
 
