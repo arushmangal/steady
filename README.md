@@ -181,5 +181,10 @@ on the task's own description, and a "Push now" button runs the push
 operation on demand instead of waiting for the daily cron — useful right
 after changing a topic's Todoist project override, which is itself now
 editable after creation (not just at add-time) from a small control under
-each topic. See `CLAUDE.md` for the full design and the real-API quirks
-(undocumented, found by testing) each one turned up.
+each topic. A pushed task that's deleted in Todoist (not completed, just
+deleted) is detected on the next push and gets a fresh one, rather than
+the topic silently going stuck forever. See `CLAUDE.md` for the full
+design and the real-API quirks (undocumented, found by testing) each one
+turned up — including the fact that Todoist soft-deletes tasks, so
+`GET /tasks/{id}` on a deleted task returns `200` with `is_deleted: true`
+instead of a 404.

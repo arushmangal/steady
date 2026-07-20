@@ -27,7 +27,11 @@
  * REVISION_LABEL (default "review") means "there's already a live
  * outstanding revision task for this topic". (1) pushes topics due
  * today/overdue to Todoist, labelled both REVISION_LABEL and STEADY_LABEL,
- * at priority 4 (Todoist's API value for the UI's "P1", its highest).
+ * at priority 4 (Todoist's API value for the UI's "P1", its highest). A
+ * topic whose existing todoist_task_id was deleted in Todoist (not
+ * completed, just deleted) is detected - via that task's `is_deleted: true`
+ * flag, not a 404, since Todoist soft-deletes - and gets a fresh task
+ * pushed instead of being silently skipped forever.
  * (2) imports any STEADY_LABEL task that does NOT yet carry REVISION_LABEL
  * as a new topic, adopting that exact task as the topic's own
  * todoist_task_id and adding REVISION_LABEL to it - a task already carrying
@@ -723,9 +727,40 @@ const COMPLETION_INSTRUCTIONS =
 
 async function pushToTodoist(env, topic) {
   if (topic.todoist_task_id) {
-    // Already pushed. Steady doesn't try to re-sync completion state here —
-    // the user checks the task off in Todoist, which is the whole point.
-    return;
+    // Previously an accepted, documented limitation: if a pushed/adopted
+    // task was deleted in Todoist without ever being completed,
+    // todoist_task_id stayed pointing at a task that no longer existed and
+    // nothing ever detected it, so the topic silently stopped being
+    // push-eligible forever. Check the task actually still exists before
+    // trusting the "already pushed" guard. Confirmed live: a deleted task's
+    // GET /tasks/{id} does NOT 404 - it returns 200 with `is_deleted: true`
+    // in the body (Todoist soft-deletes), so a plain res.ok check alone
+    // would have missed every real deletion and kept this bug alive. Both
+    // that and an actual 404 (defensive - in case some other deletion path
+    // ever does return one) count as "gone".
+    const checkRes = await fetch(`https://api.todoist.com/api/v1/tasks/${topic.todoist_task_id}`, {
+      headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
+    });
+    let isGone = checkRes.status === 404;
+    if (checkRes.ok) {
+      const existingTask = await checkRes.json();
+      isGone = !!existingTask.is_deleted;
+    } else if (checkRes.status !== 404) {
+      // A network blip or a transient 5xx isn't proof the task is gone -
+      // don't guess and risk creating a duplicate. Let this count as a
+      // failed push, same as any other pushToTodoist error, so it's
+      // retried next run instead.
+      throw new Error(`Failed to check existing Todoist task ${topic.todoist_task_id} for topic ${topic.id}: ${checkRes.status} ${await checkRes.text()}`);
+    }
+    if (!isGone) {
+      // Still there. Steady doesn't try to re-sync completion state here —
+      // the user checks the task off in Todoist, which is the whole point.
+      return;
+    }
+    await env.DB.prepare(`UPDATE topics SET todoist_task_id = NULL WHERE id = ?`)
+      .bind(topic.id)
+      .run();
+    topic = { ...topic, todoist_task_id: null };
   }
 
   const projectId = await resolveTodoistProjectId(env, topic);
