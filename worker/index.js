@@ -7,6 +7,7 @@
  *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2, appends "*Xhrs Ymins" to the pushed Todoist task's description if minutes_spent given and a task exists, returns updated topic
  *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
  *   POST   /api/topics/:id/category reassign a topic's category { category_id }
+ *   POST   /api/topics/:id/project  set/clear a topic's own Todoist project override { todoist_project_id }
  *   DELETE /api/topics/:id          archive a topic
  *   GET    /api/categories          list active categories (flat; frontend builds the tree)
  *   POST   /api/categories          create a category { name, parent_id?, todoist_project_id? }
@@ -16,6 +17,7 @@
  *   GET    /api/calendar            due-topic counts/titles by day, for a given month
  *   GET    /api/todoist/projects    list Todoist projects (for the destination picker)
  *   GET    /api/sync-status         last cron-driven Todoist operation of each kind (push/import/completion_sync)
+ *   POST   /api/push-now            manually run just the push operation on demand (bypasses the cron's daily wait)
  *
  * Anything else falls through to the static assets binding (the frontend in /public).
  *
@@ -388,6 +390,26 @@ async function handleApi(request, env, url) {
     return jsonResponse(updated);
   }
 
+  // POST /api/topics/:id/project — set/clear a topic's own Todoist project
+  // override. This is the value resolveTodoistProjectId() checks first, so
+  // it wins outright over any category-level override — see the doc comment
+  // on resolveTodoistProjectId for the full resolution order. Not validated
+  // against the live Todoist project list server-side, same as project
+  // creation/category overrides elsewhere in this file — the frontend picker
+  // is the source of valid ids.
+  if (method === "POST" && parts.length === 4 && parts[1] === "topics" && parts[3] === "project") {
+    const id = Number(parts[2]);
+    const topic = await env.DB.prepare(`SELECT id FROM topics WHERE id = ?`).bind(id).first();
+    if (!topic) return jsonResponse({ error: "not found" }, { status: 404 });
+
+    const body = await request.json();
+    await env.DB.prepare(`UPDATE topics SET todoist_project_id = ? WHERE id = ?`)
+      .bind(body.todoist_project_id || null, id)
+      .run();
+    const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+    return jsonResponse(updated);
+  }
+
   // GET /api/categories — flat list; frontend builds the tree client-side.
   if (method === "GET" && parts.length === 2 && parts[1] === "categories") {
     const { results } = await env.DB.prepare(
@@ -526,6 +548,22 @@ async function handleApi(request, env, url) {
       result[operation] = { ...row, ok: !!row.ok, stale };
     }
     return jsonResponse(result);
+  }
+
+  // POST /api/push-now — runs just the push operation immediately instead of
+  // waiting for the daily cron, for e.g. right after editing a topic's
+  // project override and wanting it in Todoist now. Goes through the same
+  // runOperation wrapper as the cron path, so it produces a real sync_log
+  // row too — a manual push that failed shouldn't be any less visible than
+  // a cron-driven one. Import/completion-sync are deliberately not run here
+  // — this button is scoped to exactly what it says: pushing, not a full
+  // three-operation sync.
+  if (method === "POST" && parts.length === 2 && parts[1] === "push-now") {
+    await runOperation(env, "push", runDailyPush);
+    const row = await env.DB.prepare(
+      `SELECT run_at, ok, succeeded, failed, detail FROM sync_log WHERE operation = 'push' ORDER BY id DESC LIMIT 1`
+    ).first();
+    return jsonResponse({ ...row, ok: !!row.ok });
   }
 
   // POST /api/topics/:id/review
@@ -669,6 +707,19 @@ async function resolveTodoistProjectId(env, topic) {
   return env.TODOIST_PROJECT_ID;
 }
 
+// Set on every task Steady itself creates, so the completion contract is
+// visible right on the task instead of living only in this file/CLAUDE.md —
+// the one thing that actually determines whether completing it in Todoist
+// updates SM-2 state (a digit comment) or just reopens the task in place
+// (runCompletionSync's no-digit path). Not applied to tasks runInboundImport
+// adopts, since those are the user's own pre-existing capture notes and
+// rewriting their description would be presumptuous.
+const COMPLETION_INSTRUCTIONS =
+  "Steady: before completing this task, add a comment with a single number " +
+  "0-5 for how well you remembered this (0 = nothing, 5 = everything) — " +
+  "that's what Steady logs as your review. Complete it with no number yet, " +
+  "and Steady reopens this same task, due today, instead of recording a review.";
+
 async function pushToTodoist(env, topic) {
   if (topic.todoist_task_id) {
     // Already pushed. Steady doesn't try to re-sync completion state here —
@@ -689,6 +740,7 @@ async function pushToTodoist(env, topic) {
     },
     body: JSON.stringify({
       content: `Review: ${topic.title}`,
+      description: COMPLETION_INSTRUCTIONS,
       project_id: projectId,
       // "review" means "there's a live outstanding revision task for this
       // topic"; "steady" is the actual sync gate for both directions - any

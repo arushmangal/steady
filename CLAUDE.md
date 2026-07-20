@@ -290,7 +290,26 @@ codebase consistently picks the boring/verifiable option over the clever
 one (see the SM-2 derivation above and the constant-time auth compare), and
 the performance case for one-query-instead-of-N doesn't matter at this
 app's scale (once per due topic, once per day, against a tree a few levels
-deep).
+deep). Because the topic-level override wins outright, picking a project at
+add-time that differs from what a topic's category resolves to (e.g.
+explicitly choosing Inbox for a topic filed under a category with its own
+override) always lands on the explicit choice, not the category's — the
+category chain is only ever consulted when the topic has no override of
+its own.
+
+**As of 2026-07-20, this override is editable after creation, not just at
+add-time** — `POST /api/topics/:id/project { todoist_project_id }` (send
+`null`/omit to clear it back to inheriting from the category chain), mirrors
+`/api/topics/:id/category`'s shape exactly, and unlike that route, this one
+*does* have a UI trigger: clicking the small "→ ProjectName" / "Set Todoist
+project override" hint under a topic's meta line (`renderProjectEdit` in
+`public/index.html`) opens an inline `<select>` (reusing `projectOptionsHtml`,
+the same tree-indented picker the add-topic form and category manager already
+use) with Save/Cancel, following the exact click-to-edit idiom the category
+manager's own name/project editing already established. Hidden entirely in
+local/offline mode and before the Todoist project list has loaded — same
+gating the add-topic picker itself uses — since there's nothing to resolve
+an override against without a live Todoist connection.
 
 **Category deletion is a safe, blocked archive, never a cascade** —
 `DELETE /api/categories/:id` returns 400 if the category still has active
@@ -315,13 +334,16 @@ default (confirmed empirically: `PRAGMA foreign_keys` returns `1`, and an
 insert with a bogus `category_id` is rejected) — worth remembering before
 any future schema change that isn't a simple `ADD COLUMN`.
 
-**Not built in this pass, by deliberate scope decision**: there's no UI to
-change an *existing* topic's category after creation (the backend route
-`POST /api/topics/:id/category` and the frontend `setTopicCategory()` exist
-and work, just have no button wired to them yet) — consistent with the
-existing open question below about richer topic editing in general.
-Categorization is settable at creation time and via the category
-manager's own rename/reparent, which covers the common case.
+**Still not built, by deliberate scope decision**: there's no UI to change
+an *existing* topic's category after creation (the backend route `POST
+/api/topics/:id/category` and the frontend `setTopicCategory()` exist and
+work, just have no button wired to them yet) — consistent with the existing
+open question below about richer topic editing in general. Categorization
+is settable at creation time and via the category manager's own
+rename/reparent, which covers the common case. (The equivalent gap for a
+topic's Todoist project override was closed on 2026-07-20 — see above — but
+that was a narrower, more requested change; category reassignment's own UI
+trigger remains open.)
 
 There are now **three** places `worker/index.js` and `public/index.html`
 must be kept in sync by hand, not two: `nowIST()`/the timezone offset, the
@@ -483,6 +505,41 @@ immediately after, and a temporary debug route fully reverted afterward
 (confirmed via `grep -i debug worker/index.js` returning nothing) — not
 assumed from the REST v2 conventions seen elsewhere in this file.
 
+### Manual push-now + on-task completion instructions (2026-07-20)
+
+Two smaller additions on top of the scheme above, both aimed at making the
+push side more usable/self-explanatory without touching the label scheme
+itself:
+
+- **`POST /api/push-now`** runs just `runDailyPush` immediately (through
+  the same `runOperation` wrapper the cron uses, so it still produces a
+  real `sync_log` row — a manual push that fails shouldn't be any less
+  visible than a cron-driven one). Deliberately scoped to push only, not a
+  full three-operation sync — import/completion-sync still only run on the
+  cron's own schedule. Surfaced as a small "Push now" button next to the
+  "Last sync" line (`#pushNowBtn` / `pushNow()` in `public/index.html`),
+  disabled with a "Pushing…" label for the duration of the request — worth
+  knowing this can take several real seconds in practice (each due topic's
+  `pushToTodoist` call is a real, sequential outbound fetch, not
+  parallelized), not a hang. Hidden in local/offline mode and whenever the
+  sync-status fetch itself couldn't reach the API, the same reachability
+  signal `renderSyncStatus` already existed to compute.
+- **Every task `pushToTodoist` creates now carries a `description`**
+  (`COMPLETION_INSTRUCTIONS` in `worker/index.js`) spelling out the actual
+  completion contract on the task itself — comment a bare 0-5 digit before
+  completing, or completing with no digit just reopens the same task due
+  today rather than recording a review. This was previously only
+  documented in this file, invisible from inside Todoist itself. Confirmed
+  compatible with `appendTimeToTodoistTask`'s existing behavior: that
+  function fetches the current description and appends a new `\n`-joined
+  line rather than overwriting it (already true before this change, per
+  the time-tracking section below), so the instructions text and a later
+  `*Xhrs Ymins` line coexist without stepping on each other. Deliberately
+  **not** applied to tasks `runInboundImport` adopts — those are the
+  user's own pre-existing capture notes, and rewriting their description
+  out from under them would be presumptuous in a way creating a brand-new
+  task never is.
+
 ## Per-topic review history (time spent + confidence, on the frontend)
 
 Steady already asked for and stored time-spent per review; the gap was
@@ -604,6 +661,9 @@ Redeploy with `wrangler deploy` any time after code changes.
   sets `archived = 1`). `POST /api/topics/:id/category` narrowly answers
   "can a topic's category be changed after creation" (yes, via the API) but
   deliberately doesn't touch this broader question — general title/notes
-  editing and a UI trigger for the category route are still both open.
+  editing and a UI trigger for the category route are still both open. (A
+  topic's Todoist project override *does* now have both, as of 2026-07-20 —
+  see the Categories section — so this gap is specifically about title/notes
+  and category, not project override anymore.)
 - The original v1 design (navy/amber, GitHub-aesthetic) exists conceptually
   but was superseded by v2 — no need to resurrect it unless asked.
