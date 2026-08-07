@@ -225,6 +225,16 @@
     font-size: 14px;
   }
   input[type="text"]:focus { outline: none; border-color: var(--accent-dim); }
+  input[type="date"] {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color-scheme: dark;
+  }
+  input[type="date"]:focus { outline: none; border-color: var(--accent-dim); }
   select.project-picker {
     background: rgba(0,0,0,0.25);
     border: 1px solid var(--border);
@@ -392,6 +402,8 @@
       <input type="text" id="titleInput" placeholder="What did you study today?" required />
       <select class="project-picker" id="categoryPicker"><option value="">Uncategorized</option></select>
       <select class="project-picker" id="projectPicker" style="display:none"></select>
+      <button type="button" class="ghost" id="backdateToggle" title="Log a study session from an earlier date">Studied earlier?</button>
+      <input type="date" id="studiedOnInput" style="display:none" />
       <button type="submit">Add</button>
     </form>
   </div>
@@ -740,17 +752,17 @@
     }
   }
 
-  async function addTopic(title, todoistProjectId, categoryId) {
+  async function addTopic(title, todoistProjectId, categoryId, studiedOn) {
     if (!useLocal) {
       try { return await apiFetch('/topics', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, todoist_project_id: todoistProjectId || undefined, category_id: categoryId || undefined }),
+        body: JSON.stringify({ title, todoist_project_id: todoistProjectId || undefined, category_id: categoryId || undefined, studied_on: studiedOn || undefined }),
       }); } catch (e) { /* fall through */ }
     }
     const topic = {
       id: Date.now(), title, ef: 2.5, interval_days: 0, repetitions: 0,
       category_id: categoryId ? Number(categoryId) : null,
-      next_due: todayISO(), last_reviewed: null, archived: 0, reviewLog: [],
+      next_due: studiedOn || todayISO(), last_reviewed: null, archived: 0, reviewLog: [],
     };
     localTopics.push(topic);
     saveLocal();
@@ -1243,9 +1255,30 @@
     if (!title) return;
     const picker = document.getElementById('projectPicker');
     const categoryPicker = document.getElementById('categoryPicker');
-    await addTopic(title, picker.style.display !== 'none' ? picker.value : undefined, categoryPicker.value);
+    const studiedOnInput = document.getElementById('studiedOnInput');
+    const studiedOn = studiedOnInput.style.display !== 'none' ? studiedOnInput.value : undefined;
+    await addTopic(title, picker.style.display !== 'none' ? picker.value : undefined, categoryPicker.value, studiedOn);
     input.value = '';
+    studiedOnInput.style.display = 'none';
+    studiedOnInput.value = '';
     refresh();
+  });
+
+  // Collapsed by default — most adds are "today", so this stays out of the
+  // way until asked for, same restraint used elsewhere in this app.
+  document.getElementById('backdateToggle').addEventListener('click', () => {
+    const dateInput = document.getElementById('studiedOnInput');
+    const opening = dateInput.style.display === 'none';
+    if (opening) {
+      const today = todayISO();
+      dateInput.max = today;
+      dateInput.value = today;
+      dateInput.style.display = '';
+      dateInput.focus();
+    } else {
+      dateInput.style.display = 'none';
+      dateInput.value = '';
+    }
   });
 
   (async () => {

@@ -3,7 +3,7 @@
  *
  * Routes:
  *   GET    /api/topics              list active topics, ordered by next_due
- *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id? }
+ *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id?, studied_on? } - studied_on (YYYY-MM-DD, not future) backdates next_due, default today
  *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2, appends "*Xhrs Ymins" to the pushed Todoist task's description if minutes_spent given and a task exists, returns updated topic
  *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
  *   POST   /api/topics/:id/category reassign a topic's category { category_id }
@@ -366,7 +366,22 @@ async function handleApi(request, env, url) {
     const category = await resolveValidCategoryId(env, body.category_id);
     if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
 
-    const due = todayISO();
+    // studied_on: optional backdate for when this was actually first
+    // studied (e.g. logging a session a few days late). Anchors next_due
+    // to that date instead of today, same as standard SRS semantics — a
+    // topic "studied" 3 days ago and never reviewed since is genuinely
+    // 3 days overdue, not freshly due today. Defaults to today, so a
+    // normal add is byte-for-byte unchanged from before this existed.
+    let due = todayISO();
+    if (body.studied_on !== undefined && body.studied_on !== null && body.studied_on !== "") {
+      if (typeof body.studied_on !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.studied_on)) {
+        return jsonResponse({ error: "studied_on must be an ISO date (YYYY-MM-DD)" }, { status: 400 });
+      }
+      if (body.studied_on > due) {
+        return jsonResponse({ error: "studied_on cannot be in the future" }, { status: 400 });
+      }
+      due = body.studied_on;
+    }
     const { meta } = await env.DB.prepare(
       `INSERT INTO topics (title, notes, next_due, todoist_project_id, category_id) VALUES (?, ?, ?, ?, ?)`
     )

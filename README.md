@@ -52,6 +52,9 @@ due-today revisions into Todoist so you actually get notified.
   ("Rated 3 · Undo") in case of a mis-tap
 - Keyboard shortcuts: `0`–`5` rates whichever topic's quality row is open,
   `/` focuses the add-topic input, `←`/`→` move the calendar a month
+- Adding a topic can be backdated ("Studied earlier?") to log a session a
+  few days late — the topic's next review is anchored to that date, so it
+  correctly shows as overdue rather than freshly due today
 - Installable as its own app (phone home screen / desktop standalone
   window) via a manifest + service worker
 - No build step, no frontend framework — `public/index.html` is plain
@@ -65,7 +68,6 @@ worker/index.js       Worker: API routes, SM-2 scheduling, Todoist cron push
 public/index.html     Frontend (served as static assets by the same Worker)
 schema.sql            D1 schema
 wrangler.toml.example Worker config template — copy to wrangler.toml and fill in
-CLAUDE.md             Full context/decisions brief, for Claude Code
 ```
 
 `wrangler.toml` itself is gitignored, since it holds account-specific
