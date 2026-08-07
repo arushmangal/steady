@@ -22,7 +22,7 @@ due-today revisions into Todoist so you actually get notified.
   each topic can target its own Todoist project (picked from a dropdown in
   the UI — shown indented by Todoist's real project/sub-project hierarchy,
   backed by `GET /api/todoist/projects` — and editable after creation too,
-  via a small "→ ProjectName" control under the topic), failing that its
+  via each topic's edit mode), failing that its
   category's own override, then the nearest ancestor category's override,
   then the default `TODOIST_PROJECT_ID` project; pushed tasks also carry a
   description spelling out the completion contract (comment a 0–5 digit
@@ -55,6 +55,9 @@ due-today revisions into Todoist so you actually get notified.
 - Adding a topic can be backdated ("Studied earlier?") to log a session a
   few days late — the topic's next review is anchored to that date, so it
   correctly shows as overdue rather than freshly due today
+- Each topic has a toggleable edit mode (title, category, Todoist project
+  override) with an explicit "Save changes?" confirmation before anything
+  is written
 - Installable as its own app (phone home screen / desktop standalone
   window) via a manifest + service worker
 - No build step, no frontend framework — `public/index.html` is plain

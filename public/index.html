@@ -298,9 +298,19 @@
   .review-dot.q-low { background: var(--danger); }
   .review-dot.q-mid { background: var(--accent-dim); }
   .review-dot.q-high { background: var(--accent); }
-  .topic-project-row { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .topic-project-hint { color: var(--text-dim); font-size: 12px; cursor: pointer; }
-  .topic-project-hint:hover { color: var(--accent); }
+  .topic-edit-form { display: flex; flex-direction: column; gap: 6px; }
+  .topic-edit-title {
+    background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  }
+  .topic-edit-title:focus { outline: none; border-color: var(--accent-dim); }
+  .topic-edit-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .topic-edit-actions { display: flex; align-items: center; gap: 6px; }
+  .topic-edit-btn {
+    background: transparent; border: none; color: var(--text-dim);
+    font-size: 12px; cursor: pointer; padding: 8px; line-height: 1;
+  }
+  .topic-edit-btn:hover { color: var(--accent); }
   .topic-due {
     font-family: Consolas, "Courier New", monospace;
     font-size: 12px; color: var(--text-dim);
@@ -788,11 +798,24 @@
     return { ok: true };
   }
 
-  // No local-mode fallback — the editing UI itself (renderProjectEdit) is
-  // already hidden whenever useLocal is true, since there's no real Todoist
-  // to resolve a project override against offline.
-  async function setTopicProject(id, projectId) {
-    return apiPost(`/topics/${id}/project`, 'POST', { todoist_project_id: projectId || undefined });
+  // Edit mode's combined save — title, category, and Todoist project
+  // override together in one request. The project picker itself is
+  // already hidden in edit mode whenever useLocal is true (no real
+  // Todoist to resolve an override against offline), so the local
+  // fallback below only ever needs to persist title/category.
+  async function updateTopic(id, { title, category_id, todoist_project_id }) {
+    if (!useLocal) {
+      const result = await apiPost(`/topics/${id}`, 'POST', { title, category_id, todoist_project_id });
+      if (result.ok) return { ok: true };
+      if (!result.networkFailure) return result; // real validation error — don't fall back
+    }
+    const topic = localTopics.find((t) => t.id === id);
+    if (topic) {
+      topic.title = title;
+      topic.category_id = category_id ? Number(category_id) : null;
+      saveLocal();
+    }
+    return { ok: true };
   }
 
   // --- Categories ---------------------------------------------------------
@@ -826,6 +849,19 @@
       }
     })('root', 0);
     return { byId, order };
+  }
+
+  /**
+   * Same shape as projectOptionsHtml, but for Steady's own category tree —
+   * inline `selected` attribute (not a post-hoc `.value =` like
+   * renderCategoryPickers uses), for building select markup as a raw HTML
+   * string inside a larger template.
+   */
+  function categoryOptionsHtml(categories, selectedId) {
+    const { order } = buildCategoryTree(categories);
+    return order
+      .map(({ category, depth }) => `<option value="${category.id}" ${String(category.id) === String(selectedId ?? '') ? 'selected' : ''}>${'  '.repeat(depth)}${escapeHtml(category.name)}</option>`)
+      .join('');
   }
 
   /**
@@ -1022,26 +1058,34 @@
   let lastTopics = [];
   let lastCategories = [];
   let confirmingArchiveId = null;
-  let editingProjectTopicId = null;
+  let editingTopicId = null;
 
   /**
-   * The topic's own Todoist project override — the one resolveTodoistProjectId
-   * checks first, winning outright over any category-level override (see
-   * that function's doc comment in worker/index.js). Not shown/editable
-   * offline (useLocal) or before the Todoist project list has loaded, same
-   * gating the add-topic project picker itself already uses.
+   * Edit mode covers exactly the fields a topic is actually created with —
+   * title, category, Todoist project override — not scheduling state
+   * (next_due/EF/repetitions), which isn't something the user "inputs".
+   * Hidden entirely offline (useLocal) since there's nothing live to
+   * resolve a project override against; category options still show since
+   * those are Steady's own data, not Todoist's.
    */
-  function renderProjectEdit(t, projectName) {
-    if (useLocal || !todoistProjects || !todoistProjects.length) return '';
-    if (editingProjectTopicId === t.id) {
-      const options = '<option value="">No override (use category/default)</option>' + projectOptionsHtml(todoistProjects, t.todoist_project_id);
-      return `<div class="topic-project-row">
-        <select class="project-picker topic-edit-project">${options}</select>
-        <button type="button" class="ghost" data-save-project="${t.id}">Save</button>
-        <button type="button" class="ghost" data-cancel-edit-project="${t.id}">Cancel</button>
+  function renderTopicEditForm(t) {
+    const categoryOptions = '<option value="">Uncategorized</option>' + categoryOptionsHtml(lastCategories, t.category_id);
+    const showProjectPicker = !useLocal && todoistProjects && todoistProjects.length;
+    const projectOptions = showProjectPicker
+      ? '<option value="">No override (use category/default)</option>' + projectOptionsHtml(todoistProjects, t.todoist_project_id)
+      : null;
+    return `
+      <div class="topic-edit-form" data-topic-edit-form="${t.id}">
+        <input type="text" class="topic-edit-title" value="${escapeHtml(t.title)}" />
+        <div class="topic-edit-row">
+          <select class="project-picker topic-edit-category">${categoryOptions}</select>
+          ${projectOptions !== null ? `<select class="project-picker topic-edit-project">${projectOptions}</select>` : ''}
+        </div>
+        <div class="topic-edit-actions" data-topic-edit-actions="${t.id}">
+          <button type="button" class="ghost" data-save-topic="${t.id}">Save</button>
+          <button type="button" class="ghost" data-cancel-edit-topic="${t.id}">Cancel</button>
+        </div>
       </div>`;
-    }
-    return `<div class="topic-project-row"><span class="topic-project-hint" data-edit-project="${t.id}">${projectName ? `→ ${escapeHtml(projectName)}` : 'Set Todoist project override'}</span></div>`;
   }
 
   function renderTopicRow(t, today) {
@@ -1053,29 +1097,33 @@
     const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
     const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
     if (t.total_minutes_spent) metaBits.push(`${formatMinutes(t.total_minutes_spent)} total`);
+    if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
     const archiveControl = confirmingArchiveId === t.id
       ? `<div class="archive-confirm-row">
            <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Delete?</button>
            <button type="button" class="archive-cancel" data-cancel-archive="${t.id}">Cancel</button>
          </div>`
       : `<button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>`;
+    const isEditing = editingTopicId === t.id;
+    const displayBlock = `
+      <div class="topic-title">${escapeHtml(t.title)}</div>
+      <div class="topic-meta">${metaBits.join(' · ')}</div>
+      ${t.trajectory_note ? `<div class="topic-insight">${escapeHtml(t.trajectory_note)}</div>` : ''}
+      ${renderReviewHistory(t)}
+      ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">Completed in Todoist without a confidence rating — re-queued for review.</div>` : ''}
+      <div class="quality-row" id="qrow-${t.id}">
+        ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
+      </div>`;
     return `
       <div class="topic ${statusClass}" data-id="${t.id}">
         <div style="flex:1">
-          <div class="topic-title">${escapeHtml(t.title)}</div>
-          <div class="topic-meta">${metaBits.join(' · ')}</div>
-          ${renderProjectEdit(t, projectName)}
-          ${t.trajectory_note ? `<div class="topic-insight">${escapeHtml(t.trajectory_note)}</div>` : ''}
-          ${renderReviewHistory(t)}
-          ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">Completed in Todoist without a confidence rating — re-queued for review.</div>` : ''}
-          <div class="quality-row" id="qrow-${t.id}">
-            ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
-          </div>
+          ${isEditing ? renderTopicEditForm(t) : displayBlock}
         </div>
         <div class="topic-right">
           ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
           <div class="topic-due ${dueClass}" data-toggle="${t.id}" style="cursor:pointer" title="due ${t.next_due}">${dueLabel}</div>
-          ${archiveControl}
+          ${!isEditing ? `<button type="button" class="topic-edit-btn" data-edit-topic="${t.id}" title="Edit">Edit</button>` : ''}
+          ${!isEditing ? archiveControl : ''}
         </div>
       </div>`;
   }
@@ -1425,25 +1473,58 @@
       if (opening) row.classList.add('open');
       return;
     }
-    const editProjectEl = e.target.closest('[data-edit-project]');
-    if (editProjectEl) {
-      editingProjectTopicId = Number(editProjectEl.dataset.editProject);
+    const editTopicEl = e.target.closest('[data-edit-topic]');
+    if (editTopicEl) {
+      editingTopicId = Number(editTopicEl.dataset.editTopic);
       renderTopics(lastTopics);
       return;
     }
-    const cancelProjectEl = e.target.closest('[data-cancel-edit-project]');
-    if (cancelProjectEl) {
-      editingProjectTopicId = null;
+    const cancelEditTopicEl = e.target.closest('[data-cancel-edit-topic]');
+    if (cancelEditTopicEl) {
+      editingTopicId = null;
       renderTopics(lastTopics);
       return;
     }
-    const saveProjectEl = e.target.closest('[data-save-project]');
-    if (saveProjectEl) {
-      const id = Number(saveProjectEl.dataset.saveProject);
-      const select = saveProjectEl.closest('.topic-project-row').querySelector('.topic-edit-project');
-      await setTopicProject(id, select.value);
-      editingProjectTopicId = null;
+    // "Save" doesn't persist immediately — it swaps in a "Save changes?"
+    // confirm step first (asked again before anything is written), via
+    // direct DOM manipulation rather than a state-driven re-render, so the
+    // still-open title input / selects keep whatever the user just typed
+    // or picked instead of snapping back to their original values.
+    const saveTopicEl = e.target.closest('[data-save-topic]');
+    if (saveTopicEl) {
+      const id = saveTopicEl.dataset.saveTopic;
+      const actions = document.querySelector(`[data-topic-edit-actions="${id}"]`);
+      actions.innerHTML = `
+        <span style="color:var(--text-dim);font-size:12px">Save changes?</span>
+        <button type="button" class="archive-confirm" data-confirm-save-topic="${id}">Save</button>
+        <button type="button" class="archive-cancel" data-cancel-confirm-save-topic="${id}">Cancel</button>`;
+      return;
+    }
+    const confirmSaveTopicEl = e.target.closest('[data-confirm-save-topic]');
+    if (confirmSaveTopicEl) {
+      const id = Number(confirmSaveTopicEl.dataset.confirmSaveTopic);
+      const form = document.querySelector(`[data-topic-edit-form="${id}"]`);
+      const title = form.querySelector('.topic-edit-title').value.trim();
+      if (!title) return;
+      const categoryId = form.querySelector('.topic-edit-category').value;
+      const projectSelect = form.querySelector('.topic-edit-project');
+      const result = await updateTopic(id, {
+        title,
+        category_id: categoryId || undefined,
+        todoist_project_id: projectSelect ? projectSelect.value || undefined : undefined,
+      });
+      if (result && result.error) return; // real validation error — leave the form open to fix
+      editingTopicId = null;
       refresh();
+      return;
+    }
+    const cancelConfirmSaveTopicEl = e.target.closest('[data-cancel-confirm-save-topic]');
+    if (cancelConfirmSaveTopicEl) {
+      const id = cancelConfirmSaveTopicEl.dataset.cancelConfirmSaveTopic;
+      const actions = document.querySelector(`[data-topic-edit-actions="${id}"]`);
+      actions.innerHTML = `
+        <button type="button" class="ghost" data-save-topic="${id}">Save</button>
+        <button type="button" class="ghost" data-cancel-edit-topic="${id}">Cancel</button>`;
       return;
     }
     const q = e.target.dataset.q;
