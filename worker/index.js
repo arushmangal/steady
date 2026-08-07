@@ -4,9 +4,10 @@
  * Routes:
  *   GET    /api/topics              list active topics, ordered by next_due
  *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id?, studied_on? } - studied_on (YYYY-MM-DD, not future) backdates next_due, default today
+ *   POST   /api/topics/:id          edit-mode save: { title, category_id?, todoist_project_id? } together (title required, others clear when omitted)
  *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2, appends "*Xhrs Ymins" to the pushed Todoist task's description if minutes_spent given and a task exists, returns updated topic
  *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
- *   POST   /api/topics/:id/category reassign a topic's category { category_id }
+ *   POST   /api/topics/:id/category reassign a topic's category on its own { category_id }
  *   POST   /api/topics/:id/project  set/clear a topic's own Todoist project override { todoist_project_id }
  *   DELETE /api/topics/:id          archive a topic
  *   GET    /api/categories          list active categories (flat; frontend builds the tree)
@@ -393,9 +394,38 @@ async function handleApi(request, env, url) {
     return jsonResponse(topic, { status: 201 });
   }
 
-  // POST /api/topics/:id/category — reassign a topic's category. Deliberately
-  // narrow (not a general topic-edit route) — richer topic editing is still
-  // an open question (see CLAUDE.md), this doesn't answer it.
+  // POST /api/topics/:id — general edit-mode save: title, category, and
+  // Todoist project override together, in one request (the fields a topic
+  // is actually created with, per CLAUDE.md's long-open "richer topic
+  // editing" question — scheduling state like next_due/EF is deliberately
+  // untouched here, it's not something the user "inputs"). All three
+  // fields are sent together every time (matching the category manager's
+  // own edit-save pattern) — not partial-patch semantics.
+  if (method === "POST" && parts.length === 3 && parts[1] === "topics") {
+    const id = Number(parts[2]);
+    const existing = await env.DB.prepare(`SELECT id FROM topics WHERE id = ?`).bind(id).first();
+    if (!existing) return jsonResponse({ error: "not found" }, { status: 404 });
+
+    const body = await request.json();
+    if (!body.title || typeof body.title !== "string") {
+      return jsonResponse({ error: "title is required" }, { status: 400 });
+    }
+    const category = await resolveValidCategoryId(env, body.category_id);
+    if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
+
+    await env.DB.prepare(
+      `UPDATE topics SET title = ?, category_id = ?, todoist_project_id = ? WHERE id = ?`
+    )
+      .bind(body.title, category.id, body.todoist_project_id || null, id)
+      .run();
+    const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+    return jsonResponse(updated);
+  }
+
+  // POST /api/topics/:id/category — reassign a topic's category on its own,
+  // without touching title/project. Superseded as the frontend's edit-mode
+  // trigger by the combined POST /api/topics/:id above, but left in place —
+  // still a valid, narrower way to do just this one thing.
   if (method === "POST" && parts.length === 4 && parts[1] === "topics" && parts[3] === "category") {
     const id = Number(parts[2]);
     const topic = await env.DB.prepare(`SELECT id FROM topics WHERE id = ?`).bind(id).first();
