@@ -37,7 +37,10 @@ due-today revisions into Todoist so you actually get notified.
   re-dues today instead, and the topic list says so. Completing a review
   either way — a Todoist checkbox or Steady's own quality buttons — closes
   the same task and clears it for the next cycle, so it can only ever be
-  reviewed once per cycle regardless of which side triggered it. A
+  reviewed once per cycle regardless of which side triggered it. Reviewing
+  a topic that hasn't been pushed to Todoist yet (e.g. same-day) pushes
+  and immediately closes a task for it too, so every review has something
+  to show in Todoist, not just ones that happened to land after a push. A
   "Last sync: N pushed, N failed" line in the UI surfaces the cron's own
   health, next to a "Push now" button that runs just the push operation
   immediately instead of waiting for the daily cron
