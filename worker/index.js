@@ -5,7 +5,7 @@
  *   GET    /api/topics              list active topics, ordered by next_due
  *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id?, studied_on? } - studied_on (YYYY-MM-DD, not future) backdates next_due, default today
  *   POST   /api/topics/:id          edit-mode save: { title, category_id?, todoist_project_id? } together (title required, others clear when omitted)
- *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2, appends "*Xhrs Ymins" to the pushed Todoist task's description if minutes_spent given and a task exists, returns updated topic
+ *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2; if the topic has no live Todoist task yet, pushes one first so the review has something to reflect, then appends "*Xhrs Ymins" and closes it either way, returns updated topic
  *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
  *   POST   /api/topics/:id/category reassign a topic's category on its own { category_id }
  *   POST   /api/topics/:id/project  set/clear a topic's own Todoist project override { todoist_project_id }
@@ -228,22 +228,48 @@ async function applyReview(env, id, quality, minutesSpent) {
     ),
   ]);
 
-  // Best-effort only: neither Todoist side-effect should ever block the
-  // review itself (the SM-2 update above) from succeeding. Closing an
-  // already-completed task (the completion-sync trigger, where the user
-  // closed it in Todoist themselves) is expected to be a harmless no-op.
-  if (topic.todoist_task_id) {
+  // Best-effort only: none of this should ever block the review itself
+  // (the SM-2 update above) from succeeding. Closing an already-completed
+  // task (the completion-sync trigger, where the user closed it in
+  // Todoist themselves) is expected to be a harmless no-op.
+  let taskId = topic.todoist_task_id;
+  if (!taskId) {
+    // Reviewed before ever being pushed (e.g. the same day a topic was
+    // added, before the next cron/push-now) - previously this silently
+    // left nothing in Todoist to show for the review at all. Push a task
+    // now so there's genuinely something to reflect, then complete it
+    // immediately below like any already-pushed topic, since the review
+    // already happened.
+    try {
+      await pushToTodoist(env, topic);
+      const pushed = await env.DB.prepare(`SELECT todoist_task_id FROM topics WHERE id = ?`).bind(id).first();
+      taskId = pushed?.todoist_task_id || null;
+    } catch (err) {
+      console.error(`Failed to push a fresh Todoist task for topic ${id} during review: ${err}`);
+    }
+  }
+  if (taskId) {
     if (minutesSpent != null) {
       try {
-        await appendTimeToTodoistTask(env, topic.todoist_task_id, minutesSpent);
+        await appendTimeToTodoistTask(env, taskId, minutesSpent);
       } catch (err) {
-        console.error(`Failed to append time-spent to Todoist task ${topic.todoist_task_id}: ${err}`);
+        console.error(`Failed to append time-spent to Todoist task ${taskId}: ${err}`);
       }
     }
     try {
-      await closeTodoistTask(env, topic.todoist_task_id);
+      await closeTodoistTask(env, taskId);
     } catch (err) {
-      console.error(`Failed to close Todoist task ${topic.todoist_task_id}: ${err}`);
+      console.error(`Failed to close Todoist task ${taskId}: ${err}`);
+    }
+    // If a fresh task was pushed just above, pushToTodoist's own write
+    // left todoist_task_id pointing at it - but it's already closed, so
+    // that would violate the "todoist_task_id is the CURRENT cycle's
+    // *outstanding* task" invariant pushToTodoist itself relies on to
+    // decide whether a topic still needs pushing. Clear it back to NULL,
+    // same as the SM-2 batch above already does for the pre-existing-task
+    // case.
+    if (taskId !== topic.todoist_task_id) {
+      await env.DB.prepare(`UPDATE topics SET todoist_task_id = NULL WHERE id = ?`).bind(id).run();
     }
   }
 
