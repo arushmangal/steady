@@ -42,8 +42,9 @@ due-today revisions into Todoist so you actually get notified.
   and immediately closes a task for it too, so every review has something
   to show in Todoist, not just ones that happened to land after a push. A
   "Last sync: N pushed, N failed" line in the UI surfaces the cron's own
-  health, next to a "Push now" button that runs just the push operation
-  immediately instead of waiting for the daily cron
+  health, next to "Push now" and "Sync now" buttons that run just the push
+  or just the completion-sync operation immediately instead of waiting for
+  the daily cron
 - A forward-looking, clickable calendar (review directly from a due day)
   and a 28-day activity heatmap, alongside the flat/grouped topic list
 - Each topic gets a short, plain-language read on its recent review

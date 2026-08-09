@@ -19,6 +19,7 @@
  *   GET    /api/todoist/projects    list Todoist projects (for the destination picker)
  *   GET    /api/sync-status         last cron-driven Todoist operation of each kind (push/import/completion_sync)
  *   POST   /api/push-now            manually run just the push operation on demand (bypasses the cron's daily wait)
+ *   POST   /api/completion-sync-now manually run just the Todoist -> Steady completion sync on demand
  *
  * Anything else falls through to the static assets binding (the frontend in /public).
  *
@@ -638,6 +639,20 @@ async function handleApi(request, env, url) {
     await runOperation(env, "push", runDailyPush);
     const row = await env.DB.prepare(
       `SELECT run_at, ok, succeeded, failed, detail FROM sync_log WHERE operation = 'push' ORDER BY id DESC LIMIT 1`
+    ).first();
+    return jsonResponse({ ...row, ok: !!row.ok });
+  }
+
+  // POST /api/completion-sync-now — runs just the Todoist -> Steady
+  // completion sync immediately instead of waiting for the daily cron, for
+  // pulling in a just-completed task's confidence rating without a wait of
+  // up to 24h. Same shape as push-now: goes through runOperation so it
+  // still produces a real sync_log row, and is scoped to exactly this one
+  // operation (not import, not push).
+  if (method === "POST" && parts.length === 2 && parts[1] === "completion-sync-now") {
+    await runOperation(env, "completion_sync", runCompletionSync);
+    const row = await env.DB.prepare(
+      `SELECT run_at, ok, succeeded, failed, detail FROM sync_log WHERE operation = 'completion_sync' ORDER BY id DESC LIMIT 1`
     ).first();
     return jsonResponse({ ...row, ok: !!row.ok });
   }

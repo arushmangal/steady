@@ -401,6 +401,7 @@
     <div class="sync-status" id="syncStatus">
       <span id="syncStatusText"></span>
       <button type="button" class="push-now-btn" id="pushNowBtn" style="display:none">Push now</button>
+      <button type="button" class="push-now-btn" id="syncNowBtn" style="display:none">Sync now</button>
     </div>
   </div>
 
@@ -750,7 +751,9 @@
     }
     // No real backend to push to in local/offline mode, or if the
     // sync-status fetch itself couldn't reach the API (status is null).
-    document.getElementById('pushNowBtn').style.display = (useLocal || !status) ? 'none' : '';
+    const hidden = useLocal || !status;
+    document.getElementById('pushNowBtn').style.display = hidden ? 'none' : '';
+    document.getElementById('syncNowBtn').style.display = hidden ? 'none' : '';
   }
 
   async function pushNow() {
@@ -764,6 +767,25 @@
         renderSyncStatus({ push: result.data });
         await refresh();
       }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  }
+
+  // Pulls in a just-completed Todoist task's confidence rating without
+  // waiting for the daily cron (up to ~24h). Doesn't touch syncStatusText
+  // (that line is push-specific) - just refreshes the topic list, since a
+  // successful completion sync's visible effect is a topic's SM-2 state
+  // (or its "no confidence given" note) changing.
+  async function syncNow() {
+    const btn = document.getElementById('syncNowBtn');
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Syncing…';
+    try {
+      const result = await apiPost('/completion-sync-now', 'POST');
+      if (result.ok) await refresh();
     } finally {
       btn.disabled = false;
       btn.textContent = originalLabel;
@@ -1303,6 +1325,7 @@
   document.getElementById('dailyQuote').textContent = dailyQuote();
   loadSyncStatus().then(renderSyncStatus);
   document.getElementById('pushNowBtn').addEventListener('click', pushNow);
+  document.getElementById('syncNowBtn').addEventListener('click', syncNow);
 
   document.getElementById('addForm').addEventListener('submit', async (e) => {
     e.preventDefault();
