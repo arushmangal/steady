@@ -212,7 +212,15 @@
   }
   .cal-detail-topic + .cal-detail-topic { border-top: 1px solid rgba(255,255,255,0.06); }
   .cal-detail-topic > span { min-width: 0; }
-  .cal-detail-quality { display: flex; gap: 4px; flex-wrap: wrap; }
+  .cal-detail-quality {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    flex-basis: 100%; /* always its own line below the title, regardless
+                          of how short the title is - otherwise a short
+                          title leaves the buttons stranded far to the
+                          right via justify-content: space-between while a
+                          long title wraps them below, an inconsistent
+                          look across rows in the same list. */
+  }
 
   form.add-topic { display: flex; gap: 8px; flex-wrap: wrap; }
   input[type="text"] {
