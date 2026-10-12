@@ -330,6 +330,14 @@
   .topic-title { font-size: 15px; }
   .topic-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
   .topic-insight { color: var(--text-dim); font-size: 12px; font-style: italic; margin-top: 2px; }
+  .topic-retention { font-size: 12px; margin-top: 3px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  .retention-pips { display: inline-flex; gap: 3px; }
+  .retention-pip { width: 10px; height: 4px; border-radius: 2px; background: var(--border); }
+  .retention-pip.done { background: var(--accent-dim); }
+  .topic-retention.retained { color: var(--accent); }
+  .topic-retention.retained .retention-pip { background: var(--accent); box-shadow: 0 0 6px rgba(240,180,41,0.5); }
+  .topic-retention.short .short-note { color: var(--danger); }
+  .topic-retention.short .retention-pip.done { background: var(--danger); opacity: 0.7; }
   .topic-unconfirmed { color: var(--danger); opacity: 0.85; }
   .review-history { display: flex; gap: 4px; margin-top: 4px; }
   .review-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
@@ -399,6 +407,7 @@
     border: 1px solid var(--border); background: var(--panel); color: var(--text-dim);
     transition: transform 0.15s, filter 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
   }
+  .q-hint { flex-basis: 100%; color: var(--text-dim); font-size: 12px; margin-bottom: 2px; }
   .qbtn:active { transform: scale(0.88); transition-duration: 0.06s; }
   .qbtn.picked { background: var(--accent); color: #201400; border-color: var(--accent); box-shadow: 0 0 14px rgba(240,180,41,0.55); }
   .qbtn:hover, .qbtn:focus-visible {
@@ -433,26 +442,79 @@
     padding: 14px 0 6px; border-bottom: 1px solid var(--border);
   }
   .cat-header:first-child { padding-top: 0; }
-  .cat-header-exam { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--accent-dim); }
+  .cat-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .exam-chip {
+    background: transparent; border: 1px dashed var(--border); color: var(--text-dim);
+    font-size: 11px; font-weight: 500; text-transform: none; letter-spacing: 0;
+    padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  }
+  .exam-chip:hover { border-color: var(--accent-dim); color: var(--text); filter: none; transform: none; box-shadow: none; }
+  .exam-chip.set { border-style: solid; border-color: var(--accent-dim); color: var(--accent); }
+  .exam-chip-edit { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; text-transform: none; letter-spacing: 0; font-weight: 500; animation: rise 0.24s var(--ease); }
+  .exam-chip-edit input[type="date"] { padding: 5px 8px; font-size: 12px; }
+  .exam-chip-edit button { padding: 5px 10px; font-size: 12px; }
+  .cat-row-right { display: flex; align-items: center; gap: 12px; }
+  .exam-short { color: var(--danger); font-size: 12px; margin-top: 4px; }
   .cat-exam-label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 12px; }
   .cat-exam-label input[type="date"] { padding: 8px 10px; }
 
-  /* Exam readiness: one row per course with an upcoming exam */
+  /* Upcoming exams: a countdown + readiness per course with an exam ahead */
   .panel-heading {
     font-family: 'Fraunces', serif; font-size: 18px; margin-bottom: 14px;
   }
-  .exam-course + .exam-course { margin-top: 16px; }
+  .exam-course { display: flex; gap: 16px; align-items: flex-start; }
+  .exam-course + .exam-course { margin-top: 18px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,0.06); }
+  .exam-countdown {
+    flex: none; width: 64px; text-align: center; padding: 8px 0 6px;
+    border: 1px solid var(--border); border-radius: 10px; background: rgba(0,0,0,0.18);
+  }
+  .exam-days { display: block; font-family: 'Fraunces', serif; font-size: 26px; line-height: 1; color: var(--text); }
+  .exam-days-label { display: block; font-size: 10px; color: var(--text-dim); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+  /* Glow is earned: only an exam inside its final-pass window lights up. */
+  .exam-countdown.soon { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 18px rgba(240,180,41,0.3); }
+  .exam-countdown.soon .exam-days { color: var(--accent); text-shadow: 0 0 12px rgba(240,180,41,0.5); }
+  .exam-body { flex: 1; min-width: 0; }
   .exam-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .exam-name { font-weight: 600; }
-  .exam-when { color: var(--text-dim); font-size: 12px; font-family: Consolas, "Courier New", monospace; }
-  .exam-when.soon { color: var(--accent); }
+  .exam-when { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .exam-empty { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
   .exam-bar {
     height: 6px; border-radius: 999px; margin: 8px 0 6px;
     background: rgba(255,255,255,0.05); border: 1px solid var(--border); overflow: hidden;
   }
   .exam-fill { height: 100%; background: var(--accent-dim); border-radius: 999px; }
   .exam-fill.full { background: var(--accent); box-shadow: 0 0 10px rgba(240,180,41,0.6); }
-  .exam-stats { color: var(--text-dim); font-size: 12px; }
+  .exam-stats { color: var(--text); font-size: 13px; }
+  .exam-substats { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+
+  /* Exams on the calendar: a striped gold "ticket" day with a star, and a
+     small bar under the final-pass days just before it. */
+  .cal-day.exam-day {
+    background: repeating-linear-gradient(135deg, rgba(240,180,41,0.22) 0 4px, rgba(240,180,41,0.06) 4px 8px);
+    border: 1.5px solid var(--accent); color: var(--text); font-weight: 600; cursor: pointer;
+    box-shadow: 0 0 12px rgba(240,180,41,0.35);
+  }
+  .cal-day.exam-day.past { box-shadow: none; opacity: 0.55; }
+  .cal-day.exam-day:hover { transform: scale(1.07); }
+  .cal-exam-star {
+    position: absolute; top: 2px; left: 4px; font-size: 10px; line-height: 1;
+    color: var(--accent); text-shadow: 0 0 6px rgba(240,180,41,0.8);
+  }
+  .cal-day.final-pass::before {
+    content: ''; position: absolute; bottom: 4px; left: 28%; right: 28%; height: 2px;
+    border-radius: 2px; background: var(--accent); opacity: 0.8;
+  }
+  .cal-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; color: var(--text-dim); font-size: 11px; }
+  .cal-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .cal-legend-exam { width: 12px; height: 9px; border-radius: 3px; border: 1px solid var(--accent);
+    background: repeating-linear-gradient(135deg, rgba(240,180,41,0.4) 0 2px, transparent 2px 4px); }
+  .cal-legend-final { width: 12px; height: 2px; border-radius: 2px; background: var(--accent); }
+  .cal-detail-exam {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 8px;
+    border: 1px solid var(--accent-dim); border-radius: 8px; background: rgba(240,180,41,0.06);
+    animation: rise 0.3s var(--ease) both;
+  }
+  .cal-detail-exam .cal-exam-star { position: static; font-size: 13px; }
 
   /* Bulk import */
   .bulk-import-body { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -477,7 +539,7 @@
     <h1>Steady<span class="wordmark-cursor" aria-hidden="true"></span></h1>
     <button type="button" class="push-now-btn" id="signOutBtn">Sign out</button>
   </div>
-  <p class="tagline">Log what you studied. Steady tells you when to look at it again.</p>
+  <p class="tagline" id="greeting">Log what you studied. Steady tells you when to look at it again.</p>
 
   <div class="panel heatmap-panel">
     <div class="heatmap" id="heatmap"></div>
@@ -485,13 +547,13 @@
     <div class="scrawl" id="dailyQuote"></div>
     <div class="sync-status" id="syncStatus">
       <span id="syncStatusText"></span>
-      <button type="button" class="push-now-btn" id="pushNowBtn" style="display:none">Push now</button>
-      <button type="button" class="push-now-btn" id="syncNowBtn" style="display:none">Sync now</button>
+      <button type="button" class="push-now-btn" id="pushNowBtn" style="display:none" title="Send everything due today to Todoist right now, instead of waiting for the morning run">Send to Todoist</button>
+      <button type="button" class="push-now-btn" id="syncNowBtn" style="display:none" title="Pull in reviews you've ticked off in Todoist">Check Todoist</button>
     </div>
   </div>
 
-  <div class="panel readiness-panel" id="readinessPanel" style="display:none">
-    <div class="panel-heading">Exam readiness</div>
+  <div class="panel readiness-panel" id="readinessPanel">
+    <div class="panel-heading">Upcoming exams</div>
     <div id="readinessList"></div>
   </div>
 
@@ -503,6 +565,7 @@
     </div>
     <div class="cal-weekdays"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
     <div class="cal-grid" id="calGrid"></div>
+    <div class="cal-legend" id="calLegend" style="display:none"><span><i class="cal-legend-exam"></i>Exam</span><span><i class="cal-legend-final"></i>Final review days</span></div>
     <div class="cal-detail" id="calDetail" style="display:none"></div>
   </div>
 
@@ -518,9 +581,9 @@
   </div>
 
   <details class="panel cat-manager bulk-import">
-    <summary>Bulk import a backlog</summary>
+    <summary>Add a backlog of older topics</summary>
     <form class="bulk-import-body" id="bulkForm">
-      <textarea id="bulkTitles" placeholder="One topic per line"></textarea>
+      <textarea id="bulkTitles" placeholder="One topic per line — paste in your old list and Steady will spread them out"></textarea>
       <div class="bulk-row">
         <select class="project-picker" id="bulkCategoryPicker"><option value="">Uncategorized</option></select>
         <select class="project-picker" id="bulkProjectPicker" style="display:none"></select>
@@ -532,7 +595,7 @@
   </details>
 
   <details class="panel cat-manager">
-    <summary>Manage categories</summary>
+    <summary>Courses &amp; categories</summary>
     <div class="cat-manager-body">
       <form class="add-category" id="addCategoryForm">
         <input type="text" id="categoryNameInput" placeholder="New category name" required />
@@ -552,10 +615,10 @@
 <div class="undo-toast" id="undoToast" style="display:none"></div>
 
 <div class="time-prompt" id="timePrompt" style="display:none">
-  <span>Time spent?</span>
+  <span>How long did that take?</span>
   <input type="number" id="timeHours" min="0" placeholder="hrs" />
   <input type="number" id="timeMins" min="0" max="59" placeholder="mins" />
-  <button type="button" id="timeLogBtn">Log</button>
+  <button type="button" id="timeLogBtn">Save</button>
   <button type="button" id="timeSkipBtn" class="ghost">Skip</button>
 </div>
 
@@ -607,6 +670,11 @@
   }
   function daysBetween(fromISO, toISO) {
     return Math.round((Date.parse(toISO) - Date.parse(fromISO)) / 86400000);
+  }
+  // "Oct 27–28", or "Oct 31 – Nov 1" across a month boundary.
+  function formatDateRange(fromISO, toISO) {
+    if (fromISO.slice(0, 7) === toISO.slice(0, 7)) return `${formatShortDate(fromISO)}–${Number(toISO.slice(8))}`;
+    return `${formatShortDate(fromISO)} – ${formatShortDate(toISO)}`;
   }
   function formatShortDate(iso) {
     return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -682,6 +750,17 @@
     "Recognition is cheap. Recall is what counts.",
     "A streak isn't the goal — the retention under it is.",
   ];
+  // What each 0-5 rating means, in words - shown as button tooltips and the
+  // quality row's hint, so the scale doesn't have to be memorised.
+  const QUALITY_LABELS = [
+    '0 — blank, nothing came back',
+    '1 — barely, mostly forgotten',
+    '2 — hazy, got bits of it',
+    '3 — got there, with real effort',
+    '4 — solid, a little hesitation',
+    '5 — effortless',
+  ];
+
   function dailyQuote() {
     const seed = todayISO();
     let hash = 0;
@@ -825,6 +904,23 @@
     return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
   }
 
+  // Every exam_date across all categories, keyed by date, plus the final-pass
+  // window (exam-3 .. exam-2, the days the exam cap aims a topic's last
+  // review at) for exams still ahead.
+  function examCalendarIndex() {
+    const today = todayISO();
+    const exams = {};
+    const finalPass = {};
+    for (const c of lastCategories) {
+      if (!c.exam_date) continue;
+      (exams[c.exam_date] ||= []).push(c);
+      if (c.exam_date >= today) {
+        for (const off of [-3, -2]) (finalPass[shiftISO(c.exam_date, off)] ||= []).push(c);
+      }
+    }
+    return { exams, finalPass };
+  }
+
   function renderCalendar({ month, days }) {
     const [y, m] = month.split('-').map(Number);
     document.getElementById('calTitle').textContent =
@@ -833,6 +929,8 @@
     const firstWeekday = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
     const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const today = todayISO();
+    const { exams, finalPass } = examCalendarIndex();
+    let monthHasExamMarks = false;
 
     let html = '';
     for (let i = 0; i < firstWeekday; i++) html += '<div class="cal-day empty"></div>';
@@ -846,33 +944,60 @@
       const classes = ['cal-day'];
       if (isToday) classes.push('today');
       if (tier > 0) classes.push(isOverdue ? `overdue-${tier}` : `due-${tier}`, 'has-due');
+      const examsHere = exams[dateStr] || [];
+      const finalHere = finalPass[dateStr] || [];
+      if (examsHere.length) classes.push('exam-day', ...(dateStr < today ? ['past'] : []));
+      else if (finalHere.length) classes.push('final-pass');
+      if (examsHere.length || finalHere.length) monthHasExamMarks = true;
       if (dateStr === selectedCalDay) classes.push('selected');
       const badge = count > 3 ? `<div class="cal-badge">${count}</div>` : '';
-      const titleAttr = due.length ? ` title="${escapeHtml(due.map((t) => t.title).join('\n'))}"` : '';
-      const dateAttr = due.length ? ` data-date="${dateStr}"` : '';
-      html += `<div class="${classes.join(' ')}"${titleAttr}${dateAttr}><span>${d}</span>${badge}</div>`;
+      const star = examsHere.length ? '<span class="cal-exam-star" aria-hidden="true">★</span>' : '';
+      const tips = [
+        ...examsHere.map((c) => `${c.name} exam`),
+        ...finalHere.map((c) => `Final review day for ${c.name}`),
+        ...due.map((t) => t.title),
+      ];
+      const titleAttr = tips.length ? ` title="${escapeHtml(tips.join('\n'))}"` : '';
+      const dateAttr = due.length || examsHere.length ? ` data-date="${dateStr}"` : '';
+      html += `<div class="${classes.join(' ')}"${titleAttr}${dateAttr}>${star}<span>${d}</span>${badge}</div>`;
     }
     patchChildren(document.getElementById('calGrid'), html);
+    document.getElementById('calLegend').style.display = monthHasExamMarks ? '' : 'none';
   }
 
   function renderCalDetail() {
     const detail = document.getElementById('calDetail');
     const due = selectedCalDay ? (calDays[selectedCalDay] || []) : [];
-    if (!selectedCalDay || !due.length) {
+    const examsHere = selectedCalDay ? (examCalendarIndex().exams[selectedCalDay] || []) : [];
+    if (!selectedCalDay || (!due.length && !examsHere.length)) {
       detail.style.display = 'none';
       detail.innerHTML = '';
       return;
     }
     const today = todayISO();
     const actionable = selectedCalDay <= today; // today or overdue: can review right here
+    const dayName = new Date(selectedCalDay + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    const examHtml = examsHere.map((c) => {
+      const left = daysBetween(today, c.exam_date);
+      const when = left < 0 ? 'already done' : left === 0 ? 'today — good luck' : left === 1 ? 'tomorrow' : `in ${left} days`;
+      return `<div class="cal-detail-exam"><span class="cal-exam-star" aria-hidden="true">★</span><span><strong>${escapeHtml(c.name)}</strong> exam · ${when}</span></div>`;
+    }).join('');
+    const heading = !due.length
+      ? dayName
+      : selectedCalDay < today
+        ? `${dayName} — ${due.length} still waiting from this day`
+        : selectedCalDay === today
+          ? `Today — ${due.length} to review`
+          : `${dayName} — ${due.length} coming up`;
     detail.style.display = '';
     detail.innerHTML = `
-      <div class="cal-detail-title">${due.length} due ${selectedCalDay}${actionable ? '' : ' (not due yet)'}</div>
-      ${due.map((t) => `
-        <div class="cal-detail-topic" data-detail-id="${t.id}">
+      <div class="cal-detail-title">${heading}</div>
+      ${examHtml}
+      ${due.map((t, i) => `
+        <div class="cal-detail-topic" data-detail-id="${t.id}" style="animation-delay:${Math.min(i * 30, 240)}ms">
           <span>${escapeHtml(t.title)}</span>
           ${actionable
-            ? `<div class="cal-detail-quality">${[0, 1, 2, 3, 4, 5].map((q) => `<button type="button" class="qbtn" data-q="${q}" data-id="${t.id}" data-detail-review="1">${q}</button>`).join('')}</div>`
+            ? `<div class="cal-detail-quality">${[0, 1, 2, 3, 4, 5].map((q) => `<button type="button" class="qbtn" data-q="${q}" data-id="${t.id}" data-detail-review="1" title="${QUALITY_LABELS[q]}">${q}</button>`).join('')}</div>`
             : ''}
         </div>`).join('')}
     `;
@@ -929,9 +1054,12 @@
         if (hours < 24) return `${hours}h ago`;
         return `${Math.round(hours / 24)}d ago`;
       })();
+      const sent = `${push.succeeded} review${push.succeeded === 1 ? '' : 's'}`;
       const label = !push.ok
-        ? `Last sync failed · ${timeAgo}`
-        : `Last sync: ${push.succeeded} pushed${push.failed ? `, ${push.failed} failed` : ''} · ${timeAgo}`;
+        ? `Couldn't reach Todoist (${timeAgo})`
+        : push.failed
+          ? `Sent ${sent} to Todoist ${timeAgo} · ${push.failed} didn't go through`
+          : `Sent ${sent} to Todoist ${timeAgo}`;
       textEl.innerHTML = `<span style="${warn ? 'color:var(--danger)' : ''}">${escapeHtml(label)}</span>`;
     }
     // No real backend to push to in local/offline mode, or if the
@@ -945,7 +1073,7 @@
     const btn = document.getElementById('pushNowBtn');
     btn.disabled = true;
     const originalLabel = btn.textContent;
-    btn.textContent = 'Pushing…';
+    btn.textContent = 'Sending…';
     try {
       const result = await apiPost('/push-now', 'POST');
       if (result.ok) {
@@ -967,7 +1095,7 @@
     const btn = document.getElementById('syncNowBtn');
     btn.disabled = true;
     const originalLabel = btn.textContent;
-    btn.textContent = 'Syncing…';
+    btn.textContent = 'Checking…';
     try {
       const result = await apiPost('/completion-sync-now', 'POST');
       if (result.ok) await refresh();
@@ -1041,8 +1169,8 @@
     const days = daysBetween(first, last) + 1;
     const range = first === last ? formatShortDate(first) : `${formatShortDate(first)} → ${formatShortDate(last)}`;
     preview.textContent =
-      `${titles.length} topic${titles.length === 1 ? '' : 's'} · first reviews ${range} (${days} day${days === 1 ? '' : 's'})` +
-      (compressed ? ` · squeezed to finish by ${formatShortDate(cap)}, before the exam` : '');
+      `${titles.length} topic${titles.length === 1 ? '' : 's'}, first reviews spread over ${days} day${days === 1 ? '' : 's'} (${range})` +
+      (compressed ? ` — squeezed in so they all start before the exam` : '');
   }
 
   async function bulkImport(items, categoryId, todoistProjectId) {
@@ -1074,12 +1202,107 @@
    * separately and combined. Hidden entirely until some course has an
    * upcoming exam, same "invisible until earned" rule as everywhere else.
    */
+  // --- Retention estimate ---------------------------------------------------
+  //
+  // "Retained" = last rated 4+ AND the gap to the next review has grown to
+  // 3+ weeks (the bar the user picked; also the conventional "mature card"
+  // threshold in spaced repetition). For anything short of that, the work
+  // left is estimated by running Steady's own sm2() forward from the topic's
+  // current state, assuming each review happens on time and goes well
+  // (rated 4), and counting reviews until the interval reaches 3 weeks. It's
+  // a projection, not a promise: a lower rating resets or slows it, which
+  // the next render simply reflects. Computed client-side from fields every
+  // topic already carries, so it works offline too and adds no
+  // server/client hand-synced pair (it reuses the existing sm2() copy).
+  const RETAINED_INTERVAL_DAYS = 21;
+
+  function retentionEstimate(t, today) {
+    if (t.last_quality != null && t.last_quality >= 4 && t.interval_days >= RETAINED_INTERVAL_DAYS) {
+      return { retained: true };
+    }
+    let state = { ef: t.ef, interval_days: t.interval_days, repetitions: t.repetitions };
+    let reviewDate = t.next_due > today ? t.next_due : today;
+    let reviews = 0;
+    for (;;) {
+      state = sm2(state, 4, state.interval_days); // on time: elapsed == scheduled interval
+      reviews++;
+      if (state.interval_days >= RETAINED_INTERVAL_DAYS || reviews >= 30) break;
+      reviewDate = shiftISO(reviewDate, state.interval_days);
+    }
+    // reviewDate is when the review that crosses the bar happens.
+    return { retained: false, reviews, reachDate: reviewDate, path: t.repetitions };
+  }
+
+  // The soonest exam still ahead for a topic, across its category chain.
+  function upcomingExamFor(t, today) {
+    if (!t.category_id) return null;
+    const categoryMap = Object.fromEntries(lastCategories.map((c) => [c.id, c]));
+    const upcoming = examDatesFor(categoryMap, t.category_id).filter((d) => d >= today).sort();
+    return upcoming[0] || null;
+  }
+
+  function renderRetention(t, today) {
+    const est = retentionEstimate(t, today);
+    // Progress pips: how far along the path to retained this topic is,
+    // measured in reviews (done = reviews already behind it on this streak).
+    const done = Math.min(t.repetitions, 6);
+    const total = est.retained ? done || 1 : Math.min(done + est.reviews, 8);
+    const pips = `<span class="retention-pips" aria-hidden="true">${Array.from({ length: total }, (_, i) =>
+      `<span class="retention-pip ${i < done ? 'done' : ''}"></span>`).join('')}</span>`;
+    if (est.retained) {
+      return `<div class="topic-retention retained" title="Rated 4+ and 3+ weeks between reviews">${pips}This one's stuck</div>`;
+    }
+    const n = `About ${est.reviews} more good review${est.reviews === 1 ? '' : 's'} until this sticks`;
+    const why = `title="Assuming on-time reviews you'd rate 4, this reaches 3+ weeks between reviews around ${formatShortDate(est.reachDate)}"`;
+    const exam = upcomingExamFor(t, today);
+    if (exam && est.reachDate > exam) {
+      return `<div class="topic-retention short" ${why}>${pips}<span>${n} — <span class="short-note">more than fits before the ${formatShortDate(exam)} exam</span></span></div>`;
+    }
+    return `<div class="topic-retention" ${why}>${pips}${n} (around ${formatShortDate(est.reachDate)})</div>`;
+  }
+
+  // Exam date chip: shown on each category header in the topic list and in
+  // the category manager, so a course's exam date is settable right where
+  // its topics are, not only inside the category edit row.
+  let editingExamCategoryId = null;
+  function examChipHtml(category) {
+    if (editingExamCategoryId === category.id) {
+      return `<span class="exam-chip-edit" data-exam-edit="${category.id}">
+          <input type="date" class="exam-chip-input" value="${category.exam_date || ''}" min="${todayISO()}" aria-label="Exam date" />
+          <button type="button" data-save-exam="${category.id}">Save</button>
+          ${category.exam_date ? `<button type="button" class="ghost" data-clear-exam="${category.id}">Clear</button>` : ''}
+          <button type="button" class="ghost" data-cancel-exam="${category.id}">Cancel</button>
+        </span>`;
+    }
+    if (category.exam_date) {
+      const past = category.exam_date < todayISO();
+      return `<button type="button" class="exam-chip ${past ? '' : 'set'}" data-set-exam="${category.id}" title="Change exam date">Exam ${formatShortDate(category.exam_date)}${past ? ' (past)' : ''}</button>`;
+    }
+    return `<button type="button" class="exam-chip" data-set-exam="${category.id}">Set exam date</button>`;
+  }
+
+  /**
+   * "Upcoming exams": one card per category with an exam still ahead,
+   * covering every topic in its subtree - a countdown, plus readiness:
+   * "ready" = last rated 4+ AND another review lined up before exam day
+   * (both asked for, shown together and separately), how many have fully
+   * stuck (retentionEstimate), and which won't stick in time. Always shown,
+   * with an empty state that says how to add one - the section doubles as
+   * the pointer to the exam-date feature itself.
+   */
   function renderReadiness(topics, categories) {
-    const panel = document.getElementById('readinessPanel');
     const today = todayISO();
+    const listEl = document.getElementById('readinessList');
     const { order } = buildCategoryTree(categories);
-    const courses = order.filter(({ category }) => category.exam_date && category.exam_date >= today);
-    if (!courses.length) { panel.style.display = 'none'; return; }
+    const courses = order
+      .filter(({ category }) => category.exam_date && category.exam_date >= today)
+      .sort((a, b) => a.category.exam_date.localeCompare(b.category.exam_date));
+    if (!courses.length) {
+      patchChildren(listEl, `<div class="exam-empty">${categories.length
+        ? 'No exams coming up. Give a course its exam date with <strong>Set exam date</strong> next to its name, and Steady will line your reviews up for it.'
+        : 'No exams coming up. Make a category for each course under <strong>Courses &amp; categories</strong>, then give it an exam date — Steady will line your reviews up for it.'}</div>`);
+      return;
+    }
 
     const childrenOf = {};
     for (const c of categories) (childrenOf[c.parent_id ?? 'root'] ||= []).push(c.id);
@@ -1095,10 +1318,8 @@
       return ids;
     };
 
-    panel.style.display = '';
-    const listEl = document.getElementById('readinessList');
     const prevWidths = new Map([...listEl.querySelectorAll('.exam-fill')].map((el) => [el.dataset.course, el.style.width]));
-    patchChildren(listEl, courses.map(({ category }) => {
+    flipPatch(listEl, courses.map(({ category }) => {
       const ids = subtree(category.id);
       const exam = category.exam_date;
       const ts = topics.filter((t) => ids.has(t.category_id));
@@ -1106,19 +1327,45 @@
       const dueBefore = ts.filter((t) => t.next_due < exam);
       const ready = rated.filter((t) => t.next_due < exam);
       const daysLeft = daysBetween(today, exam);
-      const when = daysLeft === 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : `in ${daysLeft}d`;
+      const inFinalStretch = daysLeft <= 3;
       const pct = ts.length ? Math.round((ready.length / ts.length) * 100) : 0;
-      const stats = ts.length
-        ? `${ready.length} of ${ts.length} ready · ${rated.length} rated 4+ · ${dueBefore.length} due again before the exam`
-        : 'No topics in this course yet';
+      const estimates = ts.map((t) => ({ t, est: retentionEstimate(t, today) }));
+      const stuck = estimates.filter(({ est }) => est.retained).length;
+      const short = estimates.filter(({ est }) => !est.retained && est.reachDate > exam);
+      const examDay = new Date(exam + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+      const finalWindow = daysLeft > 3
+        ? ` · final review days ${formatDateRange(shiftISO(exam, -3), shiftISO(exam, -2))}`
+        : daysLeft >= 2 ? ' · final review days are now' : '';
+      let stats, substats = '';
+      if (!ts.length) {
+        stats = 'No topics in this course yet.';
+      } else {
+        stats = ready.length === ts.length
+          ? `All ${ts.length} topics are ready.`
+          : `${ready.length} of ${ts.length} topics ready — rated 4+ and lined up for another look before the day.`;
+        substats = `${rated.length} rated 4 or higher · ${dueBefore.length} coming up again before the exam · ${stuck} stuck for good`;
+      }
+      const shortNames = short.slice(0, 4).map(({ t }) => escapeHtml(t.title)).join(', ');
+      const shortHtml = short.length
+        ? `<div class="exam-short">Won't fully stick by exam day: ${shortNames}${short.length > 4 ? ` and ${short.length - 4} more` : ''}</div>`
+        : '';
+      const countdown = daysLeft === 0
+        ? '<span class="exam-days">!</span><span class="exam-days-label">today</span>'
+        : `<span class="exam-days">${daysLeft}</span><span class="exam-days-label">day${daysLeft === 1 ? '' : 's'}</span>`;
       return `
-        <div class="exam-course">
-          <div class="exam-head">
-            <span class="exam-name">${escapeHtml(category.name)}</span>
-            <span class="exam-when ${daysLeft <= 3 ? 'soon' : ''}">Exam ${formatShortDate(exam)} · ${when}</span>
+        <div class="exam-course" data-flip="x${category.id}">
+          <div class="exam-countdown ${inFinalStretch ? 'soon' : ''}">${countdown}</div>
+          <div class="exam-body">
+            <div class="exam-head">
+              <span class="exam-name">${escapeHtml(category.name)}</span>
+              ${examChipHtml(category)}
+            </div>
+            <div class="exam-when">${examDay}${finalWindow}</div>
+            <div class="exam-bar"><div class="exam-fill ${ts.length && pct === 100 ? 'full' : ''}" data-course="${category.id}" style="width:${pct}%"></div></div>
+            <div class="exam-stats">${stats}</div>
+            ${substats ? `<div class="exam-substats">${substats}</div>` : ''}
+            ${shortHtml}
           </div>
-          <div class="exam-bar"><div class="exam-fill ${ts.length && pct === 100 ? 'full' : ''}" data-course="${category.id}" style="width:${pct}%"></div></div>
-          <div class="exam-stats">${stats}</div>
         </div>`;
     }).join(''));
     if (!MOTION) return;
@@ -1356,10 +1603,18 @@
   // keeps the backend's "undo whichever review is currently latest" safe
   // without needing a client-supplied review id.
   let undoToastTimer = null;
-  function showUndoToast(id, quality) {
+  function showUndoToast(id, quality, nextDue) {
     clearTimeout(undoToastTimer);
     const toast = document.getElementById('undoToast');
-    toast.innerHTML = `Rated ${quality} <button type="button" id="undoBtn">Undo</button>`;
+    let message = `Rated ${quality}.`;
+    if (nextDue) {
+      const days = daysBetween(todayISO(), nextDue);
+      const when = days <= 0 ? 'later today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+      message = quality < 3
+        ? `No worries — you'll see it again ${when}.`
+        : `Nice. Next look ${when}.`;
+    }
+    toast.innerHTML = `${escapeHtml(message)} <button type="button" id="undoBtn">Undo</button>`;
     showFloating(toast);
     document.getElementById('undoBtn').onclick = async () => {
       hideFloating(toast);
@@ -1395,8 +1650,8 @@
     // Acknowledge instantly; the row settles into its new place once the
     // new schedule comes back.
     document.querySelector(`.topic[data-id="${topicId}"]`)?.classList.add('is-settling');
-    await reviewTopic(topicId, quality, minutesSpent);
-    showUndoToast(topicId, quality);
+    const reviewed = await reviewTopic(topicId, quality, minutesSpent).catch(() => null);
+    showUndoToast(topicId, quality, reviewed && reviewed.next_due);
     await refresh();
     flashRow(topicId);
   }
@@ -1454,6 +1709,13 @@
       </div>`;
   }
 
+  function dueTitle(nextDue, today) {
+    const d = daysBetween(today, nextDue);
+    if (d === 0) return 'Due today';
+    if (d < 0) return `${-d} day${d === -1 ? '' : 's'} overdue`;
+    return `Due in ${d} day${d === 1 ? '' : 's'} (${formatShortDate(nextDue)})`;
+  }
+
   function renderTopicRow(t, today) {
     const overdue = t.next_due < today;
     const isToday = t.next_due === today;
@@ -1461,24 +1723,33 @@
     const dueClass = overdue ? 'overdue' : isToday ? 'due-today' : '';
     const statusClass = overdue ? 'status-overdue' : isToday ? 'status-today' : '';
     const projectName = t.todoist_project_id ? projectsById[t.todoist_project_id] : null;
-    const metaBits = [`EF ${t.ef.toFixed(2)}`, `${t.repetitions} review${t.repetitions === 1 ? '' : 's'}`];
-    if (t.total_minutes_spent) metaBits.push(`${formatMinutes(t.total_minutes_spent)} total`);
+    const metaBits = [];
+    if (!t.last_reviewed) metaBits.push('Not reviewed yet');
+    else {
+      const ago = daysBetween(t.last_reviewed, today);
+      metaBits.push(ago <= 0 ? 'Reviewed today' : ago === 1 ? 'Reviewed yesterday' : `Last reviewed ${ago} days ago`);
+      // The ease factor, in words. Only once there's a review behind it -
+      // every new topic starts at 2.5, which says nothing yet.
+      metaBits.push(t.ef >= 2.5 ? 'comes easily' : t.ef >= 2.0 ? 'takes some work' : 'a tough one');
+    }
+    if (t.total_minutes_spent) metaBits.push(`${formatMinutes(t.total_minutes_spent)} spent so far`);
     if (projectName) metaBits.push(`→ ${escapeHtml(projectName)}`);
     const archiveControl = confirmingArchiveId === t.id
       ? `<div class="archive-confirm-row">
-           <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Delete?</button>
+           <button type="button" class="archive-confirm" data-confirm-archive="${t.id}">Archive it?</button>
            <button type="button" class="archive-cancel" data-cancel-archive="${t.id}">Cancel</button>
          </div>`
-      : `<button type="button" class="archive-btn" data-archive="${t.id}" title="Archive">&times;</button>`;
+      : `<button type="button" class="archive-btn" data-archive="${t.id}" title="Archive this topic">&times;</button>`;
     const isEditing = editingTopicId === t.id;
     const displayBlock = `
       <div class="topic-title">${escapeHtml(t.title)}</div>
-      <div class="topic-meta">${metaBits.join(' · ')}</div>
+      <div class="topic-meta" title="Ease factor ${t.ef.toFixed(2)} · current streak ${t.repetitions}">${metaBits.join(' · ')}</div>
+      ${renderRetention(t, today)}
       ${t.trajectory_note ? `<div class="topic-insight">${escapeHtml(t.trajectory_note)}</div>` : ''}
       ${renderReviewHistory(t)}
-      ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">Completed in Todoist without a confidence rating — re-queued for review.</div>` : ''}
+      ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">You ticked this off in Todoist without a 0–5 rating, so it's back on your list.</div>` : ''}
       <div class="quality-row" id="qrow-${t.id}">
-        <div class="qbtns">${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}</div>
+        <div class="qbtns"><div class="q-hint">How well did it come back? 0 is blank, 5 is effortless.</div>${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}" title="${QUALITY_LABELS[q]}">${q}</button>`).join('')}</div>
       </div>`;
     return `
       <div class="topic ${statusClass}" data-id="${t.id}" data-flip="t${t.id}">
@@ -1486,8 +1757,8 @@
           ${isEditing ? renderTopicEditForm(t) : displayBlock}
         </div>
         <div class="topic-right">
-          ${t.todoist_task_id ? '<div class="pushed-dot" title="Pushed to Todoist"></div>' : ''}
-          <div class="topic-due ${dueClass}" data-toggle="${t.id}" style="cursor:pointer" title="due ${t.next_due}">${dueLabel}</div>
+          ${t.todoist_task_id ? '<div class="pushed-dot" title="Waiting in your Todoist"></div>' : ''}
+          <div class="topic-due ${dueClass}" data-toggle="${t.id}" style="cursor:pointer" title="${dueTitle(t.next_due, today)} — tap to rate">${dueLabel}</div>
           ${!isEditing ? `<button type="button" class="topic-edit-btn" data-edit-topic="${t.id}" title="Edit">Edit</button>` : ''}
           ${!isEditing ? archiveControl : ''}
         </div>
@@ -1499,7 +1770,7 @@
     if (categories) lastCategories = categories;
     const list = document.getElementById('topicList');
     if (!topics.length) {
-      patchChildren(list, '<div class="empty">No topics yet. Add something you studied today.</div>');
+      patchChildren(list, '<div class="empty">Nothing here yet. Add something you studied today, and Steady will take it from there.</div>');
       return;
     }
     const today = todayISO();
@@ -1537,9 +1808,7 @@
     }
     for (const { id, category, depth } of order) {
       if (!idsToRender.has(id)) continue;
-      const exam = category.exam_date && category.exam_date >= today
-        ? ` <span class="cat-header-exam">· exam ${formatShortDate(category.exam_date)}</span>` : '';
-      html += `<div class="cat-header" data-flip="c${id}" style="padding-left:${depth * 16}px">${escapeHtml(category.name)}${exam}</div>`;
+      html += `<div class="cat-header" data-flip="c${id}" style="padding-left:${depth * 16}px"><span>${escapeHtml(category.name)}</span>${examChipHtml(category)}</div>`;
       html += (byCategoryId[id] || []).map((t) => renderTopicRow(t, today)).join('');
     }
     flipPatch(list, html);
@@ -1698,7 +1967,7 @@
       ? `<div class="topic-due overdue" style="display:inline-block;margin-bottom:10px">${escapeHtml(categoryError)}</div>`
       : '';
     if (!categories.length) {
-      patchChildren(list, errorHtml + '<div class="empty">No categories yet.</div>');
+      patchChildren(list, errorHtml + '<div class="empty">No categories yet. Make one per course or subject.</div>');
       return;
     }
     const { order } = buildCategoryTree(categories);
@@ -1727,17 +1996,19 @@
           <div class="cat-row" style="padding-left:${indent}px">
             <span>${escapeHtml(category.name)}</span>
             <div class="archive-confirm-row">
-              <button type="button" class="archive-confirm" data-confirm-cat-archive="${id}">Delete?</button>
+              <button type="button" class="archive-confirm" data-confirm-cat-archive="${id}">Archive it?</button>
               <button type="button" class="archive-cancel" data-cancel-cat-archive="${id}">Cancel</button>
             </div>
           </div>`;
       }
       const projectName = category.todoist_project_id ? (projectsById[category.todoist_project_id] || category.todoist_project_id) : null;
-      const examHint = category.exam_date ? ` <span style="color:var(--text-dim);font-size:12px">· exam ${formatShortDate(category.exam_date)}</span>` : '';
       return `
         <div class="cat-row" style="padding-left:${indent}px">
-          <span class="cat-name" data-edit-cat="${id}">${escapeHtml(category.name)}${projectName ? ` <span style="color:var(--text-dim);font-size:12px">→ ${escapeHtml(projectName)}</span>` : ''}${examHint}</span>
-          <button type="button" class="archive-btn" data-archive-cat="${id}" title="Archive">&times;</button>
+          <span class="cat-name" data-edit-cat="${id}">${escapeHtml(category.name)}${projectName ? ` <span style="color:var(--text-dim);font-size:12px">→ ${escapeHtml(projectName)}</span>` : ''}</span>
+          <div class="cat-row-right">
+            ${examChipHtml(category)}
+            <button type="button" class="archive-btn" data-archive-cat="${id}" title="Archive">&times;</button>
+          </div>
         </div>`;
     }).join(''));
   }
@@ -1751,11 +2022,33 @@
   // Everything is fetched in parallel and rendered in one pass, so the page
   // updates as a whole instead of panel by panel.
   let hasLoaded = false;
+  // The line under the wordmark: a greeting for the time of day (IST, like
+  // everything else) and how much is waiting today, in plain words.
+  function renderGreeting(topics) {
+    const el = document.getElementById('greeting');
+    if (!topics.length) {
+      el.textContent = 'Log what you studied. Steady tells you when to look at it again.';
+      return;
+    }
+    const hour = nowIST().getUTCHours();
+    const hello = hour < 5 ? 'Up late' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    const today = todayISO();
+    const dueToday = topics.filter((t) => t.next_due === today).length;
+    const overdue = topics.filter((t) => t.next_due < today).length;
+    let load;
+    if (!dueToday && !overdue) load = "nothing's due today. Enjoy the quiet.";
+    else if (!overdue) load = `${dueToday === 1 ? 'one topic is' : `${dueToday} topics are`} waiting for you today.`;
+    else if (!dueToday) load = `${overdue === 1 ? 'one topic has' : `${overdue} topics have`} been waiting a while — no pressure, one at a time.`;
+    else load = `${dueToday} due today, plus ${overdue} still waiting from earlier.`;
+    el.textContent = `${hello} — ${load}`;
+  }
+
   async function refresh() {
     const [topics, stats, categories, calendar] = await Promise.all([
       loadTopics(), loadStats(), loadCategories(), loadCalendar(calMonth),
     ]);
     hasLoaded = true;
+    renderGreeting(topics);
     renderTopics(topics, categories);
     renderHeatmap(stats);
     renderCategoryManager(categories);
@@ -1855,7 +2148,7 @@
       if (!result.ok) { renderBulkPreview(result.error, true); return; }
       document.getElementById('bulkTitles').value = '';
       await refresh();
-      renderBulkPreview(`Imported ${result.created} topic${result.created === 1 ? '' : 's'}.`);
+      renderBulkPreview(`Added ${result.created} topic${result.created === 1 ? '' : 's'}. The first ones are up today.`);
     } finally {
       submit.disabled = false;
     }
@@ -1957,6 +2250,48 @@
     const q = Number(e.target.dataset.q);
     const topicId = useLocal ? Number(id) : id;
     showTimePrompt(topicId, q);
+  });
+
+  function rerenderExamChips() {
+    renderTopics(lastTopics);
+    renderCategoryList(lastCategories);
+    renderReadiness(lastTopics, lastCategories);
+  }
+
+  document.addEventListener('click', async (e) => {
+    const setEl = e.target.closest('[data-set-exam]');
+    if (setEl) {
+      editingExamCategoryId = Number(setEl.dataset.setExam);
+      rerenderExamChips();
+      // The same category can appear in both lists - focus the one clicked.
+      const scope = setEl.closest('#topicList, #categoryManagerList, #readinessList') || document;
+      scope.querySelector(`[data-exam-edit="${editingExamCategoryId}"] input`)?.focus();
+      return;
+    }
+    const cancelEl = e.target.closest('[data-cancel-exam]');
+    if (cancelEl) {
+      editingExamCategoryId = null;
+      rerenderExamChips();
+      return;
+    }
+    const saveEl = e.target.closest('[data-save-exam], [data-clear-exam]');
+    if (saveEl) {
+      const id = Number(saveEl.dataset.saveExam ?? saveEl.dataset.clearExam);
+      const examDate = saveEl.dataset.clearExam !== undefined
+        ? null
+        : saveEl.closest('[data-exam-edit]').querySelector('input').value || null;
+      saveEl.disabled = true;
+      const result = await updateCategory(id, { exam_date: examDate });
+      if (result && result.error) { saveEl.disabled = false; return; }
+      editingExamCategoryId = null;
+      await refresh(); // the server re-clamps due dates, so topics may move
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (!e.target.closest || !e.target.closest('[data-exam-edit]')) return;
+    if (e.key === 'Enter') { e.preventDefault(); e.target.closest('[data-exam-edit]').querySelector('[data-save-exam]').click(); }
+    if (e.key === 'Escape') { editingExamCategoryId = null; rerenderExamChips(); }
   });
 
   document.getElementById('topicList').addEventListener('click', async (e) => {

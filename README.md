@@ -66,9 +66,18 @@ due-today revisions into Todoist so you actually get notified.
 - A category can carry an exam date, making it a "course": no review for
   any topic underneath is ever scheduled past two days before the exam, so
   a final pass lands 2–3 days ahead of it (setting the date also pulls in
-  anything already scheduled too late). An "Exam readiness" panel shows,
-  per upcoming exam, how many topics were last rated 4+ and how many are
-  due again before it
+  anything already scheduled too late). Set it from the "Set exam date"
+  chip next to any category. An "Upcoming exams" section counts down to
+  each exam and shows how many topics are ready (last rated 4+ and due
+  again before it); exam days and their final review days are marked on
+  the calendar
+- Each topic shows how much work it still needs: roughly how many more
+  good reviews until it "sticks" (rated 4+ with 3+ weeks between reviews),
+  projected with Steady's own scheduling math, with a warning when that
+  won't happen before the topic's exam
+- Plain-language throughout: a greeting with what's waiting today, 0–5
+  ratings explained where you pick them, "Nice. Next look in 6 days"
+  after a review
 - Each topic has a toggleable edit mode (title, category, Todoist project
   override) with an explicit "Save changes?" confirmation before anything
   is written
