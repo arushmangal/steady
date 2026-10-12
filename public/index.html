@@ -387,6 +387,42 @@
     padding: 14px 0 6px; border-bottom: 1px solid var(--border);
   }
   .cat-header:first-child { padding-top: 0; }
+  .cat-header-exam { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--accent-dim); }
+  .cat-exam-label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 12px; }
+  .cat-exam-label input[type="date"] { padding: 8px 10px; }
+
+  /* Exam readiness: one row per course with an upcoming exam */
+  .panel-heading {
+    font-family: 'Fraunces', serif; font-size: 18px; margin-bottom: 14px;
+  }
+  .exam-course + .exam-course { margin-top: 16px; }
+  .exam-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .exam-name { font-weight: 600; }
+  .exam-when { color: var(--text-dim); font-size: 12px; font-family: Consolas, "Courier New", monospace; }
+  .exam-when.soon { color: var(--accent); }
+  .exam-bar {
+    height: 6px; border-radius: 999px; margin: 8px 0 6px;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--border); overflow: hidden;
+  }
+  .exam-fill { height: 100%; background: var(--accent-dim); border-radius: 999px; }
+  .exam-fill.full { background: var(--accent); box-shadow: 0 0 10px rgba(240,180,41,0.6); }
+  .exam-stats { color: var(--text-dim); font-size: 12px; }
+
+  /* Bulk import */
+  .bulk-import-body { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .bulk-import textarea {
+    width: 100%; min-height: 140px; resize: vertical;
+    background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 12px; border-radius: 8px; font: inherit; font-size: 14px;
+  }
+  .bulk-import textarea:focus { outline: none; border-color: var(--accent-dim); }
+  .bulk-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .bulk-row input[type="number"] {
+    width: 64px; background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+    color: var(--text); padding: 10px 8px; border-radius: 8px; font-size: 13px;
+  }
+  .bulk-preview { color: var(--text-dim); font-size: 12px; }
+  .bulk-preview.error { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -403,6 +439,11 @@
       <button type="button" class="push-now-btn" id="pushNowBtn" style="display:none">Push now</button>
       <button type="button" class="push-now-btn" id="syncNowBtn" style="display:none">Sync now</button>
     </div>
+  </div>
+
+  <div class="panel readiness-panel" id="readinessPanel" style="display:none">
+    <div class="panel-heading">Exam readiness</div>
+    <div id="readinessList"></div>
   </div>
 
   <div class="panel cal-panel">
@@ -426,6 +467,20 @@
       <button type="submit">Add</button>
     </form>
   </div>
+
+  <details class="panel cat-manager bulk-import">
+    <summary>Bulk import a backlog</summary>
+    <form class="bulk-import-body" id="bulkForm">
+      <textarea id="bulkTitles" placeholder="One topic per line"></textarea>
+      <div class="bulk-row">
+        <select class="project-picker" id="bulkCategoryPicker"><option value="">Uncategorized</option></select>
+        <select class="project-picker" id="bulkProjectPicker" style="display:none"></select>
+        <label class="cat-exam-label">Per day <input type="number" id="bulkPerDay" min="1" max="100" value="5" /></label>
+        <button type="submit" class="ghost" id="bulkSubmit">Import</button>
+      </div>
+      <div class="bulk-preview" id="bulkPreview"></div>
+    </form>
+  </details>
 
   <details class="panel cat-manager">
     <summary>Manage categories</summary>
@@ -472,6 +527,20 @@
     localStorage.setItem('steady_categories', JSON.stringify(localCategories));
   }
 
+  // Local-mode counterpart of the server's reclampAllTopics(): pulls in any
+  // topic scheduled past its course's exam cap, after anything that can
+  // change that cap without a review happening.
+  function reclampLocalTopics() {
+    const categoryMap = Object.fromEntries(localCategories.map((c) => [c.id, c]));
+    const today = todayISO();
+    for (const t of localTopics) {
+      if (t.archived || !t.category_id) continue;
+      const cap = examCapDate(examDatesFor(categoryMap, t.category_id), t.last_reviewed, today);
+      if (cap && t.next_due > cap) t.next_due = cap;
+    }
+    saveLocal();
+  }
+
   // Single-user app, user is on IST (UTC+5:30, no DST) — see CLAUDE.md.
   // Anchoring on IST instead of raw UTC matters: without it, the app thinks
   // it's still yesterday until 5:30am local time.
@@ -481,6 +550,43 @@
   }
   function todayISO() {
     return nowIST().toISOString().slice(0, 10);
+  }
+  function shiftISO(iso, days) {
+    const d = new Date(iso + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  function daysBetween(fromISO, toISO) {
+    return Math.round((Date.parse(toISO) - Date.parse(fromISO)) / 86400000);
+  }
+  function formatShortDate(iso) {
+    return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+
+  // Exam-date cap — mirrors examDatesFor()/examCapDate() in worker/index.js
+  // exactly (see CLAUDE.md). Used here for local mode's own scheduling, the
+  // bulk-import preview, and re-clamping local topics.
+  function examDatesFor(categoryMap, categoryId) {
+    const dates = [];
+    const seen = new Set();
+    let cur = categoryId;
+    while (cur && !seen.has(cur) && categoryMap[cur]) {
+      seen.add(cur);
+      if (categoryMap[cur].exam_date) dates.push(categoryMap[cur].exam_date);
+      cur = categoryMap[cur].parent_id;
+    }
+    return dates;
+  }
+  function examCapDate(examDates, lastReviewed, today) {
+    let cap = null;
+    for (const exam of examDates) {
+      if (exam < today) continue;
+      if (lastReviewed && lastReviewed >= shiftISO(exam, -3)) continue;
+      const finalPass = shiftISO(exam, -2);
+      const limit = finalPass > today ? finalPass : today;
+      if (cap === null || limit < cap) cap = limit;
+    }
+    return cap;
   }
 
   // "+4d" / "−3d" — both nextDue and today are date-only ISO strings, which
@@ -809,6 +915,133 @@
     return topic;
   }
 
+  // --- Bulk backlog import ------------------------------------------------
+
+  /**
+   * First-review dates for a backlog of `count` topics: `perDay` at a time
+   * starting today, in the order given. If that would run past `cap` (the
+   * course's exam cap), the same topics are instead spread evenly across
+   * every day up to the cap, so nothing's first review lands after its exam's
+   * final-pass window. The server re-applies the cap on its side too.
+   */
+  function staggerDueDates(count, perDay, today, cap) {
+    const daysNeeded = Math.ceil(count / perDay);
+    const daysAvailable = cap ? daysBetween(today, cap) + 1 : Infinity;
+    const compressed = daysNeeded > daysAvailable;
+    const dates = [];
+    for (let i = 0; i < count; i++) {
+      const day = compressed ? Math.floor((i * daysAvailable) / count) : Math.floor(i / perDay);
+      dates.push(shiftISO(today, day));
+    }
+    return { dates, compressed };
+  }
+
+  function bulkCapFor(categoryId) {
+    if (!categoryId) return null;
+    const categoryMap = Object.fromEntries(lastCategories.map((c) => [c.id, c]));
+    return examCapDate(examDatesFor(categoryMap, Number(categoryId)), null, todayISO());
+  }
+
+  function bulkPlan() {
+    const titles = document.getElementById('bulkTitles').value
+      .split('\n').map((l) => l.trim()).filter(Boolean);
+    const perDay = Math.max(1, Math.min(100, Number(document.getElementById('bulkPerDay').value) || 5));
+    const categoryId = document.getElementById('bulkCategoryPicker').value;
+    const cap = bulkCapFor(categoryId);
+    const { dates, compressed } = staggerDueDates(titles.length, perDay, todayISO(), cap);
+    return { titles, dates, compressed, cap, categoryId };
+  }
+
+  function renderBulkPreview(message, isError) {
+    const preview = document.getElementById('bulkPreview');
+    preview.classList.toggle('error', !!isError);
+    if (message !== undefined) { preview.textContent = message; return; }
+    const { titles, dates, compressed, cap } = bulkPlan();
+    if (!titles.length) { preview.textContent = ''; return; }
+    const first = dates[0], last = dates[dates.length - 1];
+    const days = daysBetween(first, last) + 1;
+    const range = first === last ? formatShortDate(first) : `${formatShortDate(first)} → ${formatShortDate(last)}`;
+    preview.textContent =
+      `${titles.length} topic${titles.length === 1 ? '' : 's'} · first reviews ${range} (${days} day${days === 1 ? '' : 's'})` +
+      (compressed ? ` · squeezed to finish by ${formatShortDate(cap)}, before the exam` : '');
+  }
+
+  async function bulkImport(items, categoryId, todoistProjectId) {
+    if (!useLocal) {
+      const result = await apiPost('/topics/bulk', 'POST', {
+        items, category_id: categoryId || undefined, todoist_project_id: todoistProjectId || undefined,
+      });
+      if (result.ok) return { ok: true, created: result.data.created };
+      if (!result.networkFailure) return result; // real validation error — don't fall back
+    }
+    const base = Date.now();
+    items.forEach((item, i) => {
+      localTopics.push({
+        id: base + i, title: item.title, ef: 2.5, interval_days: 0, repetitions: 0,
+        category_id: categoryId ? Number(categoryId) : null,
+        next_due: item.next_due, last_reviewed: null, archived: 0, reviewLog: [],
+      });
+    });
+    saveLocal();
+    return { ok: true, created: items.length };
+  }
+
+  // --- Exam readiness -----------------------------------------------------
+
+  /**
+   * One row per category with its own upcoming exam_date, covering every
+   * topic in its subtree. "Ready" = latest rating 4+ AND another review
+   * scheduled before the exam day — the two things asked for, shown both
+   * separately and combined. Hidden entirely until some course has an
+   * upcoming exam, same "invisible until earned" rule as everywhere else.
+   */
+  function renderReadiness(topics, categories) {
+    const panel = document.getElementById('readinessPanel');
+    const today = todayISO();
+    const { order } = buildCategoryTree(categories);
+    const courses = order.filter(({ category }) => category.exam_date && category.exam_date >= today);
+    if (!courses.length) { panel.style.display = 'none'; return; }
+
+    const childrenOf = {};
+    for (const c of categories) (childrenOf[c.parent_id ?? 'root'] ||= []).push(c.id);
+    const subtree = (rootId) => {
+      const ids = new Set();
+      const stack = [rootId];
+      while (stack.length) {
+        const id = stack.pop();
+        if (ids.has(id)) continue;
+        ids.add(id);
+        stack.push(...(childrenOf[id] || []));
+      }
+      return ids;
+    };
+
+    panel.style.display = '';
+    document.getElementById('readinessList').innerHTML = courses.map(({ category }) => {
+      const ids = subtree(category.id);
+      const exam = category.exam_date;
+      const ts = topics.filter((t) => ids.has(t.category_id));
+      const rated = ts.filter((t) => t.last_quality != null && t.last_quality >= 4);
+      const dueBefore = ts.filter((t) => t.next_due < exam);
+      const ready = rated.filter((t) => t.next_due < exam);
+      const daysLeft = daysBetween(today, exam);
+      const when = daysLeft === 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : `in ${daysLeft}d`;
+      const pct = ts.length ? Math.round((ready.length / ts.length) * 100) : 0;
+      const stats = ts.length
+        ? `${ready.length} of ${ts.length} ready · ${rated.length} rated 4+ · ${dueBefore.length} due again before the exam`
+        : 'No topics in this course yet';
+      return `
+        <div class="exam-course">
+          <div class="exam-head">
+            <span class="exam-name">${escapeHtml(category.name)}</span>
+            <span class="exam-when ${daysLeft <= 3 ? 'soon' : ''}">Exam ${formatShortDate(exam)} · ${when}</span>
+          </div>
+          <div class="exam-bar"><div class="exam-fill ${ts.length && pct === 100 ? 'full' : ''}" style="width:${pct}%"></div></div>
+          <div class="exam-stats">${stats}</div>
+        </div>`;
+    }).join('');
+  }
+
   async function archiveTopic(id) {
     if (!useLocal) {
       try { return await apiFetch(`/topics/${id}`, { method: 'DELETE' }); } catch (e) { /* fall through */ }
@@ -824,7 +1057,7 @@
       if (!result.networkFailure) return result; // real validation error — don't fall back
     }
     const topic = localTopics.find((t) => t.id === id);
-    if (topic) { topic.category_id = categoryId ? Number(categoryId) : null; saveLocal(); }
+    if (topic) { topic.category_id = categoryId ? Number(categoryId) : null; reclampLocalTopics(); }
     return { ok: true };
   }
 
@@ -843,7 +1076,7 @@
     if (topic) {
       topic.title = title;
       topic.category_id = category_id ? Number(category_id) : null;
-      saveLocal();
+      reclampLocalTopics();
     }
     return { ok: true };
   }
@@ -950,7 +1183,9 @@
       if (changes.name !== undefined) category.name = changes.name;
       if (changes.parent_id !== undefined) category.parent_id = changes.parent_id ? Number(changes.parent_id) : null;
       if (changes.todoist_project_id !== undefined) category.todoist_project_id = changes.todoist_project_id || null;
+      if (changes.exam_date !== undefined) category.exam_date = changes.exam_date || null;
       saveLocalCategories();
+      reclampLocalTopics();
     }
     return category;
   }
@@ -981,7 +1216,7 @@
   // Local-mode undo support: a one-slot snapshot of a topic's pre-review
   // state, transient/in-memory only (matches the undo toast's own 5-6s
   // lifetime — nothing here needs to survive a reload).
-  let lastLocalUndoSnapshot = null; // { topicId, ef, interval_days, repetitions, next_due, last_reviewed }
+  let lastLocalUndoSnapshot = null; // { topicId, ef, interval_days, repetitions, next_due, last_reviewed, last_quality }
 
   async function reviewTopic(id, quality, minutesSpent) {
     if (!useLocal) {
@@ -994,13 +1229,20 @@
     lastLocalUndoSnapshot = {
       topicId: id, ef: topic.ef, interval_days: topic.interval_days,
       repetitions: topic.repetitions, next_due: topic.next_due, last_reviewed: topic.last_reviewed,
+      last_quality: topic.last_quality ?? null,
     };
     const elapsedDays = topic.last_reviewed
       ? Math.round((Date.parse(todayISO()) - Date.parse(topic.last_reviewed)) / 86400000)
       : 0;
     const after = sm2(topic, quality, elapsedDays);
+    if (topic.category_id) {
+      const categoryMap = Object.fromEntries(localCategories.map((c) => [c.id, c]));
+      const cap = examCapDate(examDatesFor(categoryMap, topic.category_id), todayISO(), todayISO());
+      if (cap && after.next_due > cap) after.next_due = cap;
+    }
     Object.assign(topic, after);
     topic.last_reviewed = todayISO();
+    topic.last_quality = quality;
     topic.reviewLog = topic.reviewLog || [];
     topic.reviewLog.push(todayISO());
     saveLocal();
@@ -1015,8 +1257,8 @@
     if (!lastLocalUndoSnapshot || lastLocalUndoSnapshot.topicId !== id) return false;
     const topic = localTopics.find((t) => t.id === id);
     if (!topic) return false;
-    const { ef, interval_days, repetitions, next_due, last_reviewed } = lastLocalUndoSnapshot;
-    Object.assign(topic, { ef, interval_days, repetitions, next_due, last_reviewed });
+    const { ef, interval_days, repetitions, next_due, last_reviewed, last_quality } = lastLocalUndoSnapshot;
+    Object.assign(topic, { ef, interval_days, repetitions, next_due, last_reviewed, last_quality });
     topic.reviewLog.pop(); // otherwise the heatmap would still count the undone review
     lastLocalUndoSnapshot = null;
     saveLocal();
@@ -1201,7 +1443,9 @@
     }
     for (const { id, category, depth } of order) {
       if (!idsToRender.has(id)) continue;
-      html += `<div class="cat-header" style="padding-left:${depth * 16}px">${escapeHtml(category.name)}</div>`;
+      const exam = category.exam_date && category.exam_date >= today
+        ? ` <span class="cat-header-exam">· exam ${formatShortDate(category.exam_date)}</span>` : '';
+      html += `<div class="cat-header" style="padding-left:${depth * 16}px">${escapeHtml(category.name)}${exam}</div>`;
       html += (byCategoryId[id] || []).map((t) => renderTopicRow(t, today)).join('');
     }
     list.innerHTML = html;
@@ -1258,6 +1502,11 @@
     const selectedParent = parentPicker.value;
     parentPicker.innerHTML = '<option value="">Top level</option>' + options;
     parentPicker.value = selectedParent;
+
+    const bulkPicker = document.getElementById('bulkCategoryPicker');
+    const selectedBulk = bulkPicker.value;
+    bulkPicker.innerHTML = '<option value="">Uncategorized</option>' + options;
+    bulkPicker.value = selectedBulk;
   }
 
   function renderCategoryList(categories) {
@@ -1285,6 +1534,7 @@
             <input type="text" class="cat-edit-name" value="${escapeHtml(category.name)}" />
             <select class="project-picker cat-edit-parent"><option value="">Top level</option>${parentOptions}</select>
             ${todoistProjects ? `<select class="project-picker cat-edit-project"><option value="">No override</option>${projectOptions}</select>` : ''}
+            <label class="cat-exam-label">Exam <input type="date" class="cat-edit-exam" value="${category.exam_date || ''}" /></label>
             <button type="button" class="ghost" data-save-cat="${id}">Save</button>
             <button type="button" class="ghost" data-cancel-edit-cat="${id}">Cancel</button>
           </div>`;
@@ -1300,9 +1550,10 @@
           </div>`;
       }
       const projectName = category.todoist_project_id ? (projectsById[category.todoist_project_id] || category.todoist_project_id) : null;
+      const examHint = category.exam_date ? ` <span style="color:var(--text-dim);font-size:12px">· exam ${formatShortDate(category.exam_date)}</span>` : '';
       return `
         <div class="cat-row" style="padding-left:${indent}px">
-          <span class="cat-name" data-edit-cat="${id}">${escapeHtml(category.name)}${projectName ? ` <span style="color:var(--text-dim);font-size:12px">→ ${escapeHtml(projectName)}</span>` : ''}</span>
+          <span class="cat-name" data-edit-cat="${id}">${escapeHtml(category.name)}${projectName ? ` <span style="color:var(--text-dim);font-size:12px">→ ${escapeHtml(projectName)}</span>` : ''}${examHint}</span>
           <button type="button" class="archive-btn" data-archive-cat="${id}" title="Archive">&times;</button>
         </div>`;
     }).join('');
@@ -1319,6 +1570,8 @@
     renderTopics(topics, categories);
     renderHeatmap(stats);
     renderCategoryManager(categories);
+    renderReadiness(topics, categories);
+    renderBulkPreview();
     refreshCalendar();
   }
 
@@ -1371,11 +1624,40 @@
     const defaultIdx = order.findIndex(({ project }) => project.name === 'Steady');
     if (defaultIdx >= 0) picker.selectedIndex = defaultIdx;
     picker.style.display = '';
+    const bulkProjectPicker = document.getElementById('bulkProjectPicker');
+    bulkProjectPicker.innerHTML = '<option value="">Project: category/default</option>' + projectOptionsHtml(projects);
+    bulkProjectPicker.style.display = '';
     const categoryTodoistPicker = document.getElementById('categoryTodoistPicker');
     categoryTodoistPicker.innerHTML = '<option value="">No override</option>' + projectOptionsHtml(projects);
     categoryTodoistPicker.style.display = '';
     refresh(); // re-render so any already-loaded topics/categories pick up project names
   })();
+
+  ['bulkTitles', 'bulkPerDay', 'bulkCategoryPicker'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', () => renderBulkPreview());
+  });
+
+  document.getElementById('bulkForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const { titles, dates, categoryId } = bulkPlan();
+    if (!titles.length) return;
+    const projectPicker = document.getElementById('bulkProjectPicker');
+    const submit = document.getElementById('bulkSubmit');
+    submit.disabled = true;
+    try {
+      const result = await bulkImport(
+        titles.map((title, i) => ({ title, next_due: dates[i] })),
+        categoryId,
+        projectPicker.style.display !== 'none' ? projectPicker.value : undefined,
+      );
+      if (!result.ok) { renderBulkPreview(result.error, true); return; }
+      document.getElementById('bulkTitles').value = '';
+      await refresh();
+      renderBulkPreview(`Imported ${result.created} topic${result.created === 1 ? '' : 's'}.`);
+    } finally {
+      submit.disabled = false;
+    }
+  });
 
   document.getElementById('addCategoryForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1416,7 +1698,8 @@
       const parentId = row.querySelector('.cat-edit-parent').value;
       const projectPicker = row.querySelector('.cat-edit-project');
       const todoistProjectId = projectPicker ? projectPicker.value : '';
-      const result = await updateCategory(id, { name, parent_id: parentId || null, todoist_project_id: todoistProjectId || null });
+      const examDate = row.querySelector('.cat-edit-exam').value;
+      const result = await updateCategory(id, { name, parent_id: parentId || null, todoist_project_id: todoistProjectId || null, exam_date: examDate || null });
       if (result && result.error) {
         categoryError = result.error;
         renderCategoryList(lastCategories);

@@ -4,6 +4,7 @@
  * Routes:
  *   GET    /api/topics              list active topics, ordered by next_due
  *   POST   /api/topics              create a topic { title, notes?, category_id?, todoist_project_id?, studied_on? } - studied_on (YYYY-MM-DD, not future) backdates next_due, default today
+ *   POST   /api/topics/bulk         backlog import { items: [{ title, next_due }], category_id?, todoist_project_id? } - staggered first-review dates, exam-capped
  *   POST   /api/topics/:id          edit-mode save: { title, category_id?, todoist_project_id? } together (title required, others clear when omitted)
  *   POST   /api/topics/:id/review   record a review { quality: 0-5, minutes_spent? } -> runs SM-2; if the topic has no live Todoist task yet, pushes one first so the review has something to reflect, then appends "*Xhrs Ymins" and closes it either way, returns updated topic
  *   POST   /api/topics/:id/undo-review  revert the topic's most recent review (400 if none, or too old to undo)
@@ -11,8 +12,8 @@
  *   POST   /api/topics/:id/project  set/clear a topic's own Todoist project override { todoist_project_id }
  *   DELETE /api/topics/:id          archive a topic
  *   GET    /api/categories          list active categories (flat; frontend builds the tree)
- *   POST   /api/categories          create a category { name, parent_id?, todoist_project_id? }
- *   POST   /api/categories/:id      update a category (rename / reparent / change Todoist override)
+ *   POST   /api/categories          create a category { name, parent_id?, todoist_project_id?, exam_date? }
+ *   POST   /api/categories/:id      update a category (rename / reparent / change Todoist override / exam_date) - re-clamps topics to any exam cap
  *   DELETE /api/categories/:id      archive a category (blocked if it has active children/topics)
  *   GET    /api/stats               28-day review counts, for the activity heatmap
  *   GET    /api/calendar            due-topic counts/titles by day, for a given month
@@ -53,6 +54,98 @@
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const nowIST = () => new Date(Date.now() + IST_OFFSET_MS);
 const todayISO = () => nowIST().toISOString().slice(0, 10);
+
+// Shifts a YYYY-MM-DD date string by whole days. Date-only ISO strings
+// parse as UTC midnight per spec, so this is pure calendar arithmetic with
+// no timezone involvement.
+function shiftISO(iso, days) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function isISODate(s) {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+}
+
+// --- Exam-date cap ---------------------------------------------------------
+// A category (a "course") can carry an exam_date. Every topic in its subtree
+// has its schedule capped so no review jumps past the exam, and the last
+// pass before it lands 2-3 days ahead of it. Mirrored by examCapDate() in
+// public/index.html - change both together (see CLAUDE.md).
+
+// id -> { parent_id, exam_date } for every category, archived included
+// (a topic's chain should resolve the same regardless). Tiny table, one query.
+async function loadCategoryMap(env) {
+  const { results } = await env.DB.prepare(`SELECT id, parent_id, exam_date FROM categories`).all();
+  return Object.fromEntries(results.map((c) => [c.id, c]));
+}
+
+// Every exam_date set on a category or any of its ancestors - a topic in a
+// midterm subcategory nested under a course with its own final is bound by
+// both. Bounded by `seen`, same idiom as resolveTodoistProjectId.
+function examDatesFor(categoryMap, categoryId) {
+  const dates = [];
+  const seen = new Set();
+  let cur = categoryId;
+  while (cur && !seen.has(cur) && categoryMap[cur]) {
+    seen.add(cur);
+    if (categoryMap[cur].exam_date) dates.push(categoryMap[cur].exam_date);
+    cur = categoryMap[cur].parent_id;
+  }
+  return dates;
+}
+
+/**
+ * The latest date a topic's next_due may sit at, or null for no cap. For
+ * each upcoming exam: if the topic hasn't had its final pass yet (last
+ * reviewed before exam-3), next_due may be no later than exam-2 (or today,
+ * if that's already past). A review made on or after exam-3 IS the final
+ * pass, so that exam stops constraining the topic - otherwise a review at
+ * exam-3 would be capped to a redundant second pass at exam-2.
+ *
+ * Callers pass lastReviewed = today when capping a review that's just
+ * happened, the topic's real last_reviewed when re-clamping existing
+ * schedules, and null for brand-new topics.
+ */
+function examCapDate(examDates, lastReviewed, today) {
+  let cap = null;
+  for (const exam of examDates) {
+    if (exam < today) continue; // already sat
+    if (lastReviewed && lastReviewed >= shiftISO(exam, -3)) continue; // final pass done
+    const finalPass = shiftISO(exam, -2);
+    const limit = finalPass > today ? finalPass : today;
+    if (cap === null || limit < cap) cap = limit;
+  }
+  return cap;
+}
+
+/**
+ * Pulls in any active topic whose next_due sits past its exam cap. Run after
+ * anything that can change a topic's cap without a review happening - a
+ * category's exam_date or parent changing, or a topic moving category -
+ * so setting an exam date affects already-scheduled topics, not just future
+ * reviews. Touches next_due only, never interval_days: the exam pulls a
+ * review earlier, it doesn't erase the interval already earned (same as any
+ * early review, which sm2()'s Math.max floor already never penalizes).
+ * Recomputes everything rather than tracking which subtree changed - at
+ * this app's scale that's one cheap pass, and it can't miss a case.
+ */
+async function reclampAllTopics(env) {
+  const categoryMap = await loadCategoryMap(env);
+  const { results } = await env.DB.prepare(
+    `SELECT id, category_id, next_due, last_reviewed FROM topics WHERE archived = 0 AND category_id IS NOT NULL`
+  ).all();
+  const today = todayISO();
+  const updates = [];
+  for (const t of results) {
+    const cap = examCapDate(examDatesFor(categoryMap, t.category_id), t.last_reviewed, today);
+    if (cap && t.next_due > cap) {
+      updates.push(env.DB.prepare(`UPDATE topics SET next_due = ? WHERE id = ?`).bind(cap, t.id));
+    }
+  }
+  if (updates.length) await env.DB.batch(updates);
+}
 
 function jsonResponse(data, init = {}) {
   return new Response(JSON.stringify(data), {
@@ -213,6 +306,14 @@ async function applyReview(env, id, quality, minutesSpent) {
 
   const before = { ef: topic.ef, interval_days: topic.interval_days, repetitions: topic.repetitions };
   const after = sm2(before, quality, elapsedDays);
+
+  // Exam cap: the review just happened today, so that's its lastReviewed.
+  // Only next_due moves - interval_days stays what SM-2 earned (see
+  // reclampAllTopics for why), and reviews.interval_after records the same.
+  if (topic.category_id) {
+    const cap = examCapDate(examDatesFor(await loadCategoryMap(env), topic.category_id), todayISO(), todayISO());
+    if (cap && after.next_due > cap) after.next_due = cap;
+  }
 
   await env.DB.batch([
     env.DB.prepare(
@@ -380,6 +481,8 @@ async function handleApi(request, env, url) {
         .reverse()
         .map((r) => ({ quality: r.quality, minutes_spent: r.minutes_spent, reviewed_at: r.reviewed_at }));
       topic.total_minutes_spent = allReviews.reduce((sum, r) => sum + (r.minutes_spent || 0), 0);
+      // Latest confidence rating, for the per-course exam readiness view.
+      topic.last_quality = allReviews.length ? allReviews[allReviews.length - 1].quality : null;
     }
 
     return jsonResponse(results);
@@ -421,6 +524,46 @@ async function handleApi(request, env, url) {
     return jsonResponse(topic, { status: 201 });
   }
 
+  // POST /api/topics/bulk — backlog import { items: [{ title, next_due }],
+  // category_id?, todoist_project_id? }. The frontend computes the staggered
+  // first-review dates (so it can preview the spread before importing); the
+  // server only validates them (today or later) and re-applies the exam cap,
+  // so a stale or hand-crafted request still can't schedule past an exam.
+  // One batch, so a partial import can't happen.
+  if (method === "POST" && parts.length === 3 && parts[1] === "topics" && parts[2] === "bulk") {
+    const body = await request.json();
+    const items = body.items;
+    if (!Array.isArray(items) || !items.length) {
+      return jsonResponse({ error: "items must be a non-empty array" }, { status: 400 });
+    }
+    if (items.length > 500) {
+      return jsonResponse({ error: "at most 500 topics per import" }, { status: 400 });
+    }
+    const category = await resolveValidCategoryId(env, body.category_id);
+    if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
+
+    const today = todayISO();
+    const cap = category.id
+      ? examCapDate(examDatesFor(await loadCategoryMap(env), category.id), null, today)
+      : null;
+    const statements = [];
+    for (const item of items) {
+      const title = typeof item?.title === "string" ? item.title.trim() : "";
+      if (!title) return jsonResponse({ error: "every item needs a title" }, { status: 400 });
+      if (!isISODate(item.next_due) || item.next_due < today) {
+        return jsonResponse({ error: `next_due for "${title}" must be an ISO date, today or later` }, { status: 400 });
+      }
+      const due = cap && item.next_due > cap ? cap : item.next_due;
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO topics (title, next_due, todoist_project_id, category_id) VALUES (?, ?, ?, ?)`
+        ).bind(title, due, body.todoist_project_id || null, category.id)
+      );
+    }
+    await env.DB.batch(statements);
+    return jsonResponse({ created: statements.length }, { status: 201 });
+  }
+
   // POST /api/topics/:id — general edit-mode save: title, category, and
   // Todoist project override together, in one request (the fields a topic
   // is actually created with, per CLAUDE.md's long-open "richer topic
@@ -445,6 +588,7 @@ async function handleApi(request, env, url) {
     )
       .bind(body.title, category.id, body.todoist_project_id || null, id)
       .run();
+    await reclampAllTopics(env); // moving into a course with an exam can pull next_due in
     const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
     return jsonResponse(updated);
   }
@@ -463,6 +607,7 @@ async function handleApi(request, env, url) {
     if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
 
     await env.DB.prepare(`UPDATE topics SET category_id = ? WHERE id = ?`).bind(category.id, id).run();
+    await reclampAllTopics(env);
     const updated = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
     return jsonResponse(updated);
   }
@@ -503,11 +648,16 @@ async function handleApi(request, env, url) {
     }
     const parent = await resolveValidCategoryId(env, body.parent_id);
     if (!parent.ok) return jsonResponse({ error: parent.error }, { status: 400 });
+    const examDate = body.exam_date || null;
+    if (examDate !== null && !isISODate(examDate)) {
+      return jsonResponse({ error: "exam_date must be an ISO date (YYYY-MM-DD)" }, { status: 400 });
+    }
 
+    // A brand-new category has no topics yet, so nothing to re-clamp.
     const { meta } = await env.DB.prepare(
-      `INSERT INTO categories (name, parent_id, todoist_project_id) VALUES (?, ?, ?)`
+      `INSERT INTO categories (name, parent_id, todoist_project_id, exam_date) VALUES (?, ?, ?, ?)`
     )
-      .bind(body.name, parent.id, body.todoist_project_id ?? null)
+      .bind(body.name, parent.id, body.todoist_project_id ?? null, examDate)
       .run();
     const category = await env.DB.prepare(`SELECT * FROM categories WHERE id = ?`)
       .bind(meta.last_row_id)
@@ -542,11 +692,26 @@ async function handleApi(request, env, url) {
 
     const todoistProjectId = body.todoist_project_id !== undefined ? body.todoist_project_id : existing.todoist_project_id;
 
+    // Clearing an exam date (null/"") doesn't push anything back out - topics
+    // already pulled in just come due a little early, and their next real
+    // review reschedules them normally.
+    let examDate = existing.exam_date;
+    if (body.exam_date !== undefined) {
+      examDate = body.exam_date || null;
+      if (examDate !== null && !isISODate(examDate)) {
+        return jsonResponse({ error: "exam_date must be an ISO date (YYYY-MM-DD)" }, { status: 400 });
+      }
+    }
+
     await env.DB.prepare(
-      `UPDATE categories SET name = ?, parent_id = ?, todoist_project_id = ? WHERE id = ?`
+      `UPDATE categories SET name = ?, parent_id = ?, todoist_project_id = ?, exam_date = ? WHERE id = ?`
     )
-      .bind(name, parentId, todoistProjectId, id)
+      .bind(name, parentId, todoistProjectId, examDate, id)
       .run();
+    // Setting an exam date, or reparenting under a course that has one,
+    // changes the cap on every topic underneath - apply it now, not only at
+    // each topic's next review.
+    await reclampAllTopics(env);
     const updated = await env.DB.prepare(`SELECT * FROM categories WHERE id = ?`).bind(id).first();
     return jsonResponse(updated);
   }

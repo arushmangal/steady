@@ -6,6 +6,11 @@ CREATE TABLE IF NOT EXISTS categories (
   name               TEXT NOT NULL,
   parent_id          INTEGER REFERENCES categories(id) ON DELETE SET NULL,
   todoist_project_id TEXT,             -- overrides ancestor/global default when set
+  -- Optional exam date (ISO, YYYY-MM-DD) for a course. Applies to every
+  -- topic in this category's subtree: no scheduled review may land past
+  -- two days before it, so a final pass falls 2-3 days before the exam.
+  -- Existing live DBs need: ALTER TABLE categories ADD COLUMN exam_date TEXT;
+  exam_date          TEXT,
   archived           INTEGER NOT NULL DEFAULT 0,
   created_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
