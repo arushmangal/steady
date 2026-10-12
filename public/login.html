@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sign in · Steady</title>
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#f0b429" />
+<link rel="icon" href="/icons/icon-192.png" />
+<link rel="apple-touch-icon" href="/icons/icon-180.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* Same Gold Leaf tokens as index.html - keep in step if the palette changes. */
+  :root {
+    --bg: #150f04;
+    --panel: #20160a;
+    --border: #41300f;
+    --text: #f5ecd8;
+    --text-dim: #a8935f;
+    --accent: #f0b429;
+    --accent-dim: #8a6a2a;
+    --danger: #e8623f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px;
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(240,180,41,0.07), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 10%, rgba(201,138,46,0.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: 'Manrope', system-ui, sans-serif;
+  }
+  .card { width: 100%; max-width: 360px; animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  @media (prefers-reduced-motion: reduce) { .card, .wordmark-cursor { animation: none; } }
+  h1 {
+    font-family: 'Fraunces', serif; font-weight: 500; font-size: 40px; margin: 0 0 4px;
+    text-shadow: 0 0 18px rgba(240,180,41,0.45), 0 0 40px rgba(240,180,41,0.15);
+  }
+  .wordmark-cursor {
+    display: inline-block; width: 9px; height: 0.62em; margin-left: 5px; vertical-align: -0.06em;
+    background: var(--accent); box-shadow: 0 0 10px rgba(240,180,41,0.7);
+    animation: cursor-blink 1.1s steps(1) infinite;
+  }
+  @keyframes cursor-blink { 50% { opacity: 0; } }
+  .tagline { color: var(--text-dim); margin: 0 0 28px; font-size: 14px; }
+  form {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; display: flex; flex-direction: column; gap: 12px;
+  }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-dim); }
+  input {
+    background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--text);
+    padding: 11px 12px; border-radius: 8px; font-size: 15px; font-family: inherit;
+    transition: border-color 0.15s;
+  }
+  input:focus { outline: none; border-color: var(--accent-dim); }
+  button {
+    margin-top: 4px; background: var(--accent); color: #201400; border: none;
+    padding: 11px 18px; border-radius: 8px; font-weight: 600; font-size: 15px; font-family: inherit;
+    cursor: pointer; transition: filter 0.15s, box-shadow 0.15s;
+  }
+  button:hover { filter: brightness(1.08); box-shadow: 0 4px 14px rgba(240,180,41,0.3); }
+  button:disabled { opacity: 0.6; cursor: default; filter: none; box-shadow: none; }
+  .error { color: var(--danger); font-size: 13px; min-height: 18px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Steady<span class="wordmark-cursor" aria-hidden="true"></span></h1>
+  <p class="tagline">Sign in to pick up where you left off.</p>
+  <form id="loginForm">
+    <label>Username
+      <input id="username" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus />
+    </label>
+    <label>Password
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+    </label>
+    <div class="error" id="error" role="alert"></div>
+    <button type="submit" id="submit">Sign in</button>
+  </form>
+</main>
+<script>
+  // Only ever return to a same-origin path - never an absolute or
+  // protocol-relative URL smuggled in via ?next=.
+  function nextPath() {
+    const next = new URLSearchParams(location.search).get('next') || '/';
+    return next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/';
+  }
+
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submit');
+    const errorEl = document.getElementById('error');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+    errorEl.textContent = '';
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      if (res.ok) { location.replace(nextPath()); return; }
+      const data = await res.json().catch(() => ({}));
+      errorEl.textContent = data.error || 'Sign-in failed.';
+      document.getElementById('password').select();
+    } catch (err) {
+      errorEl.textContent = "Couldn't reach Steady. Check your connection.";
+    }
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  });
+</script>
+</body>
+</html>

@@ -138,10 +138,12 @@ it's set, everything works except the daily Todoist push
 per-topic so one failure doesn't block the rest of the batch, and counted
 in the "Last sync" line in the UI rather than only ever logged).
 
-**5. (Optional) Gate the app behind Basic Auth**
+**5. (Optional) Require a login**
 
 This app has no other access control, so if you deploy it to a public
-`workers.dev` URL, set these two secrets to require a login:
+`workers.dev` URL, set these two secrets to require signing in on Steady's
+own login page (a 30-day signed session cookie afterwards, no browser
+popup; an `Authorization: Basic` header still works for scripted access):
 
 ```
 wrangler secret put BASIC_AUTH_USER
