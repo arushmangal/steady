@@ -9,6 +9,7 @@
 <link rel="icon" href="/icons/icon-192.png" />
 <link rel="apple-touch-icon" href="/icons/icon-180.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Fraunces:opsz,wght@9..144,500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
 <style>
   :root {
@@ -21,8 +22,16 @@
     --accent-dim: #8a6a2a;
     --accent2: #c98a2e;
     --danger: #e8623f;
+    /* One motion vocabulary for the whole app: things decelerate into
+       place (ease-out-quint-ish), quickly - nothing linear, nothing slow. */
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
   * { box-sizing: border-box; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 14px) scale(0.98); } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  }
   body {
     margin: 0;
     background:
@@ -92,7 +101,7 @@
     box-shadow: 0 0 10px rgba(240,180,41,0.5);
   }
   .heatmap-label { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; justify-content: space-between; }
-  .sync-status { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sync-status { color: var(--text-dim); font-size: 11px; margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 24px; /* reserved, so the line filling in doesn't shove the page down */ }
   .push-now-btn {
     background: transparent; border: 1px solid var(--border); color: var(--text-dim);
     font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
@@ -105,6 +114,11 @@
     padding: 10px 14px; font-size: 13px; color: var(--text);
     box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     display: flex; align-items: center; gap: 12px; z-index: 100;
+    animation: toast-in 0.32s var(--ease);
+  }
+  .undo-toast.leaving, .time-prompt.leaving {
+    opacity: 0; transform: translate(-50%, 10px);
+    transition: opacity 0.18s ease-in, transform 0.18s ease-in;
   }
   .undo-toast button {
     background: none; border: none; color: var(--accent); font-weight: 600;
@@ -117,6 +131,7 @@
     padding: 10px 14px; font-size: 13px; color: var(--text);
     box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     display: flex; align-items: center; gap: 8px; z-index: 100;
+    animation: toast-in 0.32s var(--ease);
   }
   .time-prompt input[type="number"] {
     width: 52px; background: rgba(0,0,0,0.25); border: 1px solid var(--border);
@@ -165,12 +180,17 @@
     border-color: var(--accent);
     color: var(--text);
     font-weight: 600;
+    box-shadow: 0 0 0 3px rgba(240,180,41,0.14);
+  }
+  /* The pulse animates only the opacity of a pre-drawn ring, which the
+     compositor can do on its own - animating box-shadow directly repaints
+     the cell every frame, forever. */
+  .cal-day.today::after {
+    content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none;
+    box-shadow: 0 0 0 5px rgba(240,180,41,0.28);
     animation: cal-pulse 2.4s ease-in-out infinite;
   }
-  @keyframes cal-pulse {
-    0%, 100% { box-shadow: 0 0 0 3px rgba(240,180,41,0.14); }
-    50% { box-shadow: 0 0 0 5px rgba(240,180,41,0.28); }
-  }
+  @keyframes cal-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
   .cal-day.due-1 { background: rgba(240,180,41,0.16); color: var(--text); }
   .cal-day.due-2 {
     background: rgba(240,180,41,0.32);
@@ -193,6 +213,7 @@
   }
   .cal-day.has-due { cursor: pointer; }
   .cal-day.has-due:hover { transform: scale(1.07); box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
+  .cal-day.has-due:active { transform: scale(0.97); transition-duration: 0.06s; }
   .cal-day.selected { outline: 2px solid var(--text); outline-offset: 1px; }
   .cal-badge {
     position: absolute; top: 3px; right: 3px; font-size: 9px; font-weight: 700;
@@ -205,7 +226,9 @@
   .cal-detail {
     margin-top: 14px; padding-top: 14px;
     border-top: 1px dashed rgba(255,255,255,0.12);
+    animation: rise 0.28s var(--ease);
   }
+  .cal-detail-topic { animation: rise 0.32s var(--ease) both; }
   .cal-detail-title { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
   .cal-detail-topic {
     display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
@@ -271,9 +294,11 @@
     font-weight: 600;
     font-size: 14px;
     cursor: pointer;
-    transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+    transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), filter 0.2s var(--ease), background 0.2s, color 0.2s, border-color 0.2s;
   }
   button:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(240,180,41,0.35); }
+  /* A press should feel physical: a quick give under the finger. */
+  button:active { transform: translateY(0) scale(0.97); transition-duration: 0.06s; }
   button.ghost {
     background: transparent;
     border: 1px solid var(--border);
@@ -281,6 +306,7 @@
     box-shadow: none;
   }
   button.ghost:hover { border-color: var(--accent-dim); color: var(--text); transform: none; box-shadow: none; filter: none; }
+  button.ghost:active { transform: scale(0.97); }
 
   .topics-wrap { margin-bottom: 20px; }
   .topic {
@@ -292,9 +318,12 @@
     border: 1px solid var(--border);
     border-radius: 10px;
     margin-bottom: 8px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease), opacity 0.25s var(--ease);
   }
   .topic:hover { border-color: var(--accent-dim); }
+  /* Rated, waiting on the server: acknowledged instantly, settles once the
+     new schedule comes back and the row glides to its new place. */
+  .topic.is-settling { opacity: 0.55; pointer-events: none; }
   .topic:last-child { margin-bottom: 0; }
   .topic.status-overdue { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), 0 0 20px rgba(232,98,63,0.28); }
   .topic.status-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 20px rgba(240,180,41,0.28); }
@@ -307,7 +336,7 @@
   .review-dot.q-low { background: var(--danger); }
   .review-dot.q-mid { background: var(--accent-dim); }
   .review-dot.q-high { background: var(--accent); }
-  .topic-edit-form { display: flex; flex-direction: column; gap: 6px; }
+  .topic-edit-form { display: flex; flex-direction: column; gap: 6px; animation: rise 0.26s var(--ease); }
   .topic-edit-title {
     background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--text);
     padding: 8px 10px; border-radius: 8px; font-size: 14px; font-weight: 600;
@@ -351,13 +380,27 @@
   }
   .archive-cancel:hover { border-color: var(--accent-dim); color: var(--text); }
 
-  .quality-row { display: none; gap: 6px; margin-top: 10px; }
-  .quality-row.open { display: flex; }
+  /* Expands/collapses instead of snapping: the 0fr -> 1fr grid-row trick
+     animates to the content's natural height without hardcoding it.
+     visibility (delayed on close) keeps collapsed buttons out of tab order. */
+  .quality-row {
+    display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: 0; visibility: hidden;
+    transition: grid-template-rows 0.28s var(--ease), opacity 0.2s ease, margin-top 0.28s var(--ease), visibility 0s linear 0.28s;
+  }
+  .quality-row.open {
+    grid-template-rows: 1fr; opacity: 1; margin-top: 10px; visibility: visible;
+    transition-delay: 0s;
+  }
+  /* overflow must clip the collapsed row, but not the buttons' hover lift
+     and glow - the padding/negative-margin pair gives them room inside it. */
+  .qbtns { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; overflow: hidden; padding: 6px; margin: -6px; }
   .qbtn {
     width: 30px; height: 30px; border-radius: 50%; font-size: 12px; font-weight: 600;
     border: 1px solid var(--border); background: var(--panel); color: var(--text-dim);
     transition: transform 0.15s, filter 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
   }
+  .qbtn:active { transform: scale(0.88); transition-duration: 0.06s; }
+  .qbtn.picked { background: var(--accent); color: #201400; border-color: var(--accent); box-shadow: 0 0 14px rgba(240,180,41,0.55); }
   .qbtn:hover, .qbtn:focus-visible {
     transform: translateY(-2px); background: var(--accent); color: #201400;
     border-color: var(--accent); box-shadow: 0 0 14px rgba(240,180,41,0.55); outline: none;
@@ -371,6 +414,8 @@
   }
   .cat-manager summary:hover { color: var(--text); }
   .cat-manager-body { margin-top: 14px; }
+  details[open] > .cat-manager-body, details[open] > .bulk-import-body { animation: rise 0.3s var(--ease); }
+  .cat-manager summary { transition: color 0.2s; }
   form.add-category { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
   .cat-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -807,7 +852,7 @@
       const dateAttr = due.length ? ` data-date="${dateStr}"` : '';
       html += `<div class="${classes.join(' ')}"${titleAttr}${dateAttr}><span>${d}</span>${badge}</div>`;
     }
-    document.getElementById('calGrid').innerHTML = html;
+    patchChildren(document.getElementById('calGrid'), html);
   }
 
   function renderCalDetail() {
@@ -833,11 +878,17 @@
     `;
   }
 
-  async function refreshCalendar() {
+  async function refreshCalendar(direction = 0) {
     const result = await loadCalendar(calMonth);
     calDays = result.days || {};
     renderCalendar(result);
     renderCalDetail();
+    if (direction && MOTION) {
+      for (const el of [document.getElementById('calGrid'), document.getElementById('calTitle')]) {
+        el.animate([{ opacity: 0, transform: `translateX(${direction * 18}px)` }, { opacity: 1, transform: 'none' }],
+          { duration: 320, easing: EASE });
+      }
+    }
   }
 
   // Best-effort only: a missing/unconfigured Todoist token shouldn't flip
@@ -1045,7 +1096,9 @@
     };
 
     panel.style.display = '';
-    document.getElementById('readinessList').innerHTML = courses.map(({ category }) => {
+    const listEl = document.getElementById('readinessList');
+    const prevWidths = new Map([...listEl.querySelectorAll('.exam-fill')].map((el) => [el.dataset.course, el.style.width]));
+    patchChildren(listEl, courses.map(({ category }) => {
       const ids = subtree(category.id);
       const exam = category.exam_date;
       const ts = topics.filter((t) => ids.has(t.category_id));
@@ -1064,10 +1117,15 @@
             <span class="exam-name">${escapeHtml(category.name)}</span>
             <span class="exam-when ${daysLeft <= 3 ? 'soon' : ''}">Exam ${formatShortDate(exam)} · ${when}</span>
           </div>
-          <div class="exam-bar"><div class="exam-fill ${ts.length && pct === 100 ? 'full' : ''}" style="width:${pct}%"></div></div>
+          <div class="exam-bar"><div class="exam-fill ${ts.length && pct === 100 ? 'full' : ''}" data-course="${category.id}" style="width:${pct}%"></div></div>
           <div class="exam-stats">${stats}</div>
         </div>`;
-    }).join('');
+    }).join(''));
+    if (!MOTION) return;
+    for (const el of listEl.querySelectorAll('.exam-fill')) {
+      const from = prevWidths.get(el.dataset.course) ?? '0%';
+      if (from !== el.style.width) el.animate([{ width: from }, { width: el.style.width }], { duration: 700, easing: EASE });
+    }
   }
 
   async function archiveTopic(id) {
@@ -1302,13 +1360,13 @@
     clearTimeout(undoToastTimer);
     const toast = document.getElementById('undoToast');
     toast.innerHTML = `Rated ${quality} <button type="button" id="undoBtn">Undo</button>`;
-    toast.style.display = '';
+    showFloating(toast);
     document.getElementById('undoBtn').onclick = async () => {
-      toast.style.display = 'none';
+      hideFloating(toast);
       const ok = await undoReview(id);
       if (ok) refresh();
     };
-    undoToastTimer = setTimeout(() => { toast.style.display = 'none'; }, 6000);
+    undoToastTimer = setTimeout(() => hideFloating(toast), 6000);
   }
 
   // Quality is picked first (by click or keyboard), then this prompt asks
@@ -1318,9 +1376,14 @@
 
   function showTimePrompt(topicId, quality) {
     pendingReview = { topicId, quality };
+    // Keep the chosen rating visibly selected while the time prompt is up,
+    // so the tap clearly "took".
+    document.querySelectorAll('.qbtn.picked').forEach((b) => b.classList.remove('picked'));
+    document.querySelectorAll(`.qbtn[data-id="${topicId}"][data-q="${quality}"]`).forEach((b) => b.classList.add('picked'));
+    hideFloating(document.getElementById('undoToast'));
     document.getElementById('timeHours').value = '';
     document.getElementById('timeMins').value = '';
-    document.getElementById('timePrompt').style.display = '';
+    showFloating(document.getElementById('timePrompt'));
     document.getElementById('timeHours').focus();
   }
 
@@ -1328,10 +1391,14 @@
     if (!pendingReview) return;
     const { topicId, quality } = pendingReview;
     pendingReview = null;
-    document.getElementById('timePrompt').style.display = 'none';
+    hideFloating(document.getElementById('timePrompt'));
+    // Acknowledge instantly; the row settles into its new place once the
+    // new schedule comes back.
+    document.querySelector(`.topic[data-id="${topicId}"]`)?.classList.add('is-settling');
     await reviewTopic(topicId, quality, minutesSpent);
     showUndoToast(topicId, quality);
-    refresh();
+    await refresh();
+    flashRow(topicId);
   }
 
   document.getElementById('timeLogBtn').addEventListener('click', () => {
@@ -1345,14 +1412,13 @@
   });
 
   function renderHeatmap(days) {
-    const heatmap = document.getElementById('heatmap');
-    heatmap.innerHTML = days
+    patchChildren(document.getElementById('heatmap'), days
       .map((d) => {
         const tier = d.count === 0 ? 0 : d.count <= 1 ? 1 : d.count <= 3 ? 2 : 3;
         const cls = tier > 0 ? `heat-cell heat-${tier}` : 'heat-cell';
         return `<div class="${cls}" title="${d.day}: ${d.count} review${d.count === 1 ? '' : 's'}"></div>`;
       })
-      .join('');
+      .join(''));
   }
 
   let lastTopics = [];
@@ -1412,10 +1478,10 @@
       ${renderReviewHistory(t)}
       ${t.unconfirmed_completion_at ? `<div class="topic-insight topic-unconfirmed">Completed in Todoist without a confidence rating — re-queued for review.</div>` : ''}
       <div class="quality-row" id="qrow-${t.id}">
-        ${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}
+        <div class="qbtns">${[0, 1, 2, 3, 4, 5].map((q) => `<button class="qbtn" data-q="${q}" data-id="${t.id}">${q}</button>`).join('')}</div>
       </div>`;
     return `
-      <div class="topic ${statusClass}" data-id="${t.id}">
+      <div class="topic ${statusClass}" data-id="${t.id}" data-flip="t${t.id}">
         <div style="flex:1">
           ${isEditing ? renderTopicEditForm(t) : displayBlock}
         </div>
@@ -1433,7 +1499,7 @@
     if (categories) lastCategories = categories;
     const list = document.getElementById('topicList');
     if (!topics.length) {
-      list.innerHTML = '<div class="empty">No topics yet. Add something you studied today.</div>';
+      patchChildren(list, '<div class="empty">No topics yet. Add something you studied today.</div>');
       return;
     }
     const today = todayISO();
@@ -1441,7 +1507,7 @@
     // No category ever created: exact flat list, zero visible change from
     // before this feature existed — no stray "Uncategorized" header either.
     if (!lastCategories.length) {
-      list.innerHTML = topics.map((t) => renderTopicRow(t, today)).join('');
+      flipPatch(list, topics.map((t) => renderTopicRow(t, today)).join(''));
       return;
     }
 
@@ -1466,17 +1532,106 @@
 
     let html = '';
     if (uncategorized.length) {
-      html += `<div class="cat-header">Uncategorized</div>`;
+      html += `<div class="cat-header" data-flip="uncategorized">Uncategorized</div>`;
       html += uncategorized.map((t) => renderTopicRow(t, today)).join('');
     }
     for (const { id, category, depth } of order) {
       if (!idsToRender.has(id)) continue;
       const exam = category.exam_date && category.exam_date >= today
         ? ` <span class="cat-header-exam">· exam ${formatShortDate(category.exam_date)}</span>` : '';
-      html += `<div class="cat-header" style="padding-left:${depth * 16}px">${escapeHtml(category.name)}${exam}</div>`;
+      html += `<div class="cat-header" data-flip="c${id}" style="padding-left:${depth * 16}px">${escapeHtml(category.name)}${exam}</div>`;
       html += (byCategoryId[id] || []).map((t) => renderTopicRow(t, today)).join('');
     }
-    list.innerHTML = html;
+    flipPatch(list, html);
+  }
+
+  // --- Rendering without snapping -----------------------------------------
+  //
+  // Every render here builds a full HTML string (simple, no framework), but
+  // assigning it via innerHTML throws away every node and rebuilds them -
+  // the page visibly "re-prints" after each action, restarts animations, and
+  // nothing can transition because nothing survives. patchChildren() instead
+  // keeps any existing child whose markup is unchanged, in place and
+  // untouched, and only swaps in what actually differs. flipPatch() adds
+  // FLIP on top (First, Last, Invert, Play): it records where each keyed
+  // element ([data-flip]) was, patches, then animates it from its old spot to
+  // its new one - so a just-rated topic glides down the list to where its
+  // new due date puts it, and everything below slides up to fill the gap.
+
+  const MOTION = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
+
+  function patchChildren(container, html) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html.trim();
+    const reusable = new Map(); // outerHTML -> [live nodes with that exact markup]
+    for (const el of container.children) {
+      if (!reusable.has(el.outerHTML)) reusable.set(el.outerHTML, []);
+      reusable.get(el.outerHTML).push(el);
+    }
+    const desired = [...tpl.content.children].map((el) => reusable.get(el.outerHTML)?.shift() || el);
+    desired.forEach((el, i) => {
+      if (container.children[i] !== el) container.insertBefore(el, container.children[i] || null);
+    });
+    while (container.children.length > desired.length) container.lastElementChild.remove();
+    // Stray whitespace text nodes left over from any earlier innerHTML render.
+    for (const n of [...container.childNodes]) if (n.nodeType === 3) n.remove();
+  }
+
+  const hasRenderedOnce = new WeakSet();
+  function flipPatch(container, html) {
+    const before = new Map();
+    if (MOTION) for (const el of container.querySelectorAll('[data-flip]')) before.set(el.dataset.flip, el.getBoundingClientRect().top);
+    patchChildren(container, html);
+    if (!MOTION) return;
+    const firstRender = !hasRenderedOnce.has(container);
+    hasRenderedOnce.add(container);
+    let entering = 0;
+    for (const el of container.querySelectorAll('[data-flip]')) {
+      const top = before.get(el.dataset.flip);
+      if (top === undefined) {
+        // New element: fade up into place - staggered on the very first
+        // render so the list reads as arriving, not printing.
+        const delay = firstRender ? Math.min(entering++ * 28, 320) : 0;
+        el.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+          { duration: 360, delay, easing: EASE, fill: 'backwards' });
+        continue;
+      }
+      const dy = top - el.getBoundingClientRect().top;
+      if (Math.abs(dy) > 1) {
+        el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
+          { duration: Math.min(700, 380 + Math.abs(dy) * 0.15), easing: EASE });
+      }
+    }
+  }
+
+  function flashRow(id) {
+    const row = document.querySelector(`.topic[data-id="${id}"]`);
+    if (!row || !MOTION) return;
+    row.animate(
+      [{ boxShadow: '0 0 0 1px #f0b429, 0 0 26px rgba(240,180,41,0.45)' }, { boxShadow: '0 0 0 1px rgba(240,180,41,0), 0 0 26px rgba(240,180,41,0)' }],
+      { duration: 1100, easing: 'ease-out' }
+    );
+  }
+
+  // Animate an element out before whatever removes it runs.
+  async function animateOut(el) {
+    if (!el || !MOTION) return;
+    await el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateX(16px)' }],
+      { duration: 200, easing: 'ease-in', fill: 'forwards' }).finished.catch(() => {});
+  }
+
+  function showFloating(el) {
+    clearTimeout(el._hideTimer);
+    el.classList.remove('leaving');
+    el.style.display = '';
+  }
+  function hideFloating(el) {
+    if (el.style.display === 'none') return;
+    if (!MOTION) { el.style.display = 'none'; return; }
+    el.classList.add('leaving');
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(() => { el.style.display = 'none'; el.classList.remove('leaving'); }, 180);
   }
 
   function escapeHtml(s) {
@@ -1543,11 +1698,11 @@
       ? `<div class="topic-due overdue" style="display:inline-block;margin-bottom:10px">${escapeHtml(categoryError)}</div>`
       : '';
     if (!categories.length) {
-      list.innerHTML = errorHtml + '<div class="empty">No categories yet.</div>';
+      patchChildren(list, errorHtml + '<div class="empty">No categories yet.</div>');
       return;
     }
     const { order } = buildCategoryTree(categories);
-    list.innerHTML = errorHtml + order.map(({ id, category, depth }) => {
+    patchChildren(list, errorHtml + order.map(({ id, category, depth }) => {
       const indent = depth * 16;
       if (editingCategoryId === id) {
         const parentOptions = order
@@ -1584,7 +1739,7 @@
           <span class="cat-name" data-edit-cat="${id}">${escapeHtml(category.name)}${projectName ? ` <span style="color:var(--text-dim);font-size:12px">→ ${escapeHtml(projectName)}</span>` : ''}${examHint}</span>
           <button type="button" class="archive-btn" data-archive-cat="${id}" title="Archive">&times;</button>
         </div>`;
-    }).join('');
+    }).join(''));
   }
 
   function renderCategoryManager(categories) {
@@ -1593,17 +1748,29 @@
     renderCategoryList(categories);
   }
 
+  // Everything is fetched in parallel and rendered in one pass, so the page
+  // updates as a whole instead of panel by panel.
+  let hasLoaded = false;
   async function refresh() {
-    const [topics, stats, categories] = await Promise.all([loadTopics(), loadStats(), loadCategories()]);
+    const [topics, stats, categories, calendar] = await Promise.all([
+      loadTopics(), loadStats(), loadCategories(), loadCalendar(calMonth),
+    ]);
+    hasLoaded = true;
     renderTopics(topics, categories);
     renderHeatmap(stats);
     renderCategoryManager(categories);
     renderReadiness(topics, categories);
     renderBulkPreview();
-    refreshCalendar();
+    calDays = calendar.days || {};
+    renderCalendar(calendar);
+    renderCalDetail();
   }
 
   document.getElementById('dailyQuote').textContent = dailyQuote();
+  // Draw the heatmap and calendar empty right away, at their final size, so
+  // nothing below them jumps when the real data lands a moment later.
+  renderHeatmap(Array.from({ length: 28 }, (_, i) => ({ day: shiftISO(todayISO(), i - 27), count: 0 })));
+  renderCalendar({ month: calMonth, days: {} });
   loadSyncStatus().then(renderSyncStatus);
   document.getElementById('pushNowBtn').addEventListener('click', pushNow);
   document.getElementById('syncNowBtn').addEventListener('click', syncNow);
@@ -1659,7 +1826,13 @@
     const categoryTodoistPicker = document.getElementById('categoryTodoistPicker');
     categoryTodoistPicker.innerHTML = '<option value="">No override</option>' + projectOptionsHtml(projects);
     categoryTodoistPicker.style.display = '';
-    refresh(); // re-render so any already-loaded topics/categories pick up project names
+    // Re-render from what's already loaded so project names appear, rather
+    // than refetching everything. If the first load hasn't landed yet, it'll
+    // pick the names up itself.
+    if (hasLoaded) {
+      renderTopics(lastTopics);
+      renderCategoryList(lastCategories);
+    }
   })();
 
   ['bulkTitles', 'bulkPerDay', 'bulkCategoryPicker'].forEach((id) => {
@@ -1766,8 +1939,8 @@
     }
   });
 
-  document.getElementById('calPrev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); selectedCalDay = null; refreshCalendar(); });
-  document.getElementById('calNext').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); selectedCalDay = null; refreshCalendar(); });
+  document.getElementById('calPrev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); selectedCalDay = null; refreshCalendar(-1); });
+  document.getElementById('calNext').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); selectedCalDay = null; refreshCalendar(1); });
 
   document.getElementById('calGrid').addEventListener('click', (e) => {
     const cell = e.target.closest('.cal-day[data-date]');
@@ -1795,7 +1968,10 @@
     }
     const confirmId = e.target.dataset.confirmArchive;
     if (confirmId) {
-      await archiveTopic(useLocal ? Number(confirmId) : confirmId);
+      await Promise.all([
+        animateOut(e.target.closest('.topic')),
+        archiveTopic(useLocal ? Number(confirmId) : confirmId),
+      ]);
       confirmingArchiveId = null;
       refresh();
       return;

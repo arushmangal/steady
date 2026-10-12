@@ -297,8 +297,15 @@ function sm2(prev, quality, elapsedDays) {
  * all, so a topic reviewed from Steady's own UI could never be pushed a
  * second time - the exact same class of bug already fixed for the other
  * trigger, just not this one).
+ *
+ * `defer`, when given, receives the best-effort Todoist follow-up (push /
+ * append time / close) as a promise instead of it being awaited - the /review
+ * route passes ctx.waitUntil, so the response goes back the moment the SM-2
+ * write lands rather than after 3-4 sequential Todoist round-trips (which
+ * made every rating in the UI hang for a second or two). The cron path
+ * passes nothing and awaits as before - it's already off the request path.
  */
-async function applyReview(env, id, quality, minutesSpent) {
+async function applyReview(env, id, quality, minutesSpent, defer) {
   const topic = await env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
   if (!topic) return null;
 
@@ -336,6 +343,15 @@ async function applyReview(env, id, quality, minutesSpent) {
   // (the SM-2 update above) from succeeding. Closing an already-completed
   // task (the completion-sync trigger, where the user closed it in
   // Todoist themselves) is expected to be a harmless no-op.
+  const followUp = syncReviewToTodoist(env, topic, minutesSpent);
+  if (defer) defer(followUp);
+  else await followUp;
+
+  return env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
+}
+
+async function syncReviewToTodoist(env, topic, minutesSpent) {
+  const id = topic.id;
   let taskId = topic.todoist_task_id;
   if (!taskId) {
     // Reviewed before ever being pushed (e.g. the same day a topic was
@@ -376,8 +392,6 @@ async function applyReview(env, id, quality, minutesSpent) {
       await env.DB.prepare(`UPDATE topics SET todoist_task_id = NULL WHERE id = ?`).bind(id).run();
     }
   }
-
-  return env.DB.prepare(`SELECT * FROM topics WHERE id = ?`).bind(id).first();
 }
 
 /**
@@ -452,7 +466,7 @@ async function reopenTodoistTask(env, taskId) {
   }
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, ctx) {
   const method = request.method;
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "topics", ...]
 
@@ -840,7 +854,7 @@ async function handleApi(request, env, url) {
       }
     }
 
-    const updated = await applyReview(env, id, quality, minutesSpent);
+    const updated = await applyReview(env, id, quality, minutesSpent, (p) => ctx.waitUntil(p));
     if (!updated) return jsonResponse({ error: "not found" }, { status: 404 });
     return jsonResponse(updated);
   }
@@ -1397,7 +1411,7 @@ async function handleLogin(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/login" && request.method === "POST") {
@@ -1428,7 +1442,7 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       try {
-        return await handleApi(request, env, url);
+        return await handleApi(request, env, url, ctx);
       } catch (err) {
         return jsonResponse({ error: String(err) }, { status: 500 });
       }
