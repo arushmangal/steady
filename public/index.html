@@ -55,6 +55,7 @@
   }
   @media (prefers-reduced-motion: reduce) { .wordmark-cursor { animation: none; } }
   @keyframes cursor-blink { 50% { opacity: 0; } }
+  .masthead { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
   .tagline { color: var(--text-dim); margin: 0 0 32px; font-size: 14px; }
   .scrawl {
     font-family: 'Caveat', cursive;
@@ -427,7 +428,10 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Steady<span class="wordmark-cursor" aria-hidden="true"></span></h1>
+  <div class="masthead">
+    <h1>Steady<span class="wordmark-cursor" aria-hidden="true"></span></h1>
+    <button type="button" class="push-now-btn" id="signOutBtn">Sign out</button>
+  </div>
   <p class="tagline">Log what you studied. Steady tells you when to look at it again.</p>
 
   <div class="panel heatmap-panel">
@@ -666,9 +670,32 @@
     return { ef, interval_days, repetitions, next_due: next.toISOString().slice(0, 10) };
   }
 
+  // A 401 means the session cookie expired or was cleared, not that the API
+  // is unreachable - send the browser to sign in rather than letting the
+  // caller fall back to localStorage mode and silently diverge from the
+  // server.
+  function redirectIfSignedOut(res) {
+    if (res.status !== 401) return false;
+    const here = location.pathname + location.search;
+    location.href = '/login' + (here !== '/' ? `?next=${encodeURIComponent(here)}` : '');
+    return true;
+  }
+
+  async function signOut() {
+    try { await fetch(API + '/logout', { method: 'POST' }); } catch (e) { /* cookie clears on expiry anyway */ }
+    location.href = '/login';
+  }
+
   async function apiFetch(path, opts) {
+    let res;
     try {
-      const res = await fetch(API + path, opts);
+      res = await fetch(API + path, opts);
+    } catch (e) {
+      useLocal = true;
+      throw e;
+    }
+    if (redirectIfSignedOut(res)) throw new Error('signed out');
+    try {
       if (!res.ok) throw new Error('api error');
       return await res.json();
     } catch (e) {
@@ -692,6 +719,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
+      if (redirectIfSignedOut(res)) return { ok: false, error: 'signed out' };
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (res.status >= 500) useLocal = true;
@@ -1579,6 +1607,7 @@
   loadSyncStatus().then(renderSyncStatus);
   document.getElementById('pushNowBtn').addEventListener('click', pushNow);
   document.getElementById('syncNowBtn').addEventListener('click', syncNow);
+  document.getElementById('signOutBtn').addEventListener('click', signOut);
 
   document.getElementById('addForm').addEventListener('submit', async (e) => {
     e.preventDefault();

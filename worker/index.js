@@ -21,6 +21,8 @@
  *   GET    /api/sync-status         last cron-driven Todoist operation of each kind (push/import/completion_sync)
  *   POST   /api/push-now            manually run just the push operation on demand (bypasses the cron's daily wait)
  *   POST   /api/completion-sync-now manually run just the Todoist -> Steady completion sync on demand
+ *   POST   /api/login               { username, password } -> 30-day signed session cookie (public; see checkAuth)
+ *   POST   /api/logout              clears the session cookie
  *
  * Anything else falls through to the static assets binding (the frontend in /public).
  *
@@ -1303,30 +1305,127 @@ async function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
+// --- Auth: login page + signed session cookie ------------------------------
+//
+// Credentials are still env.BASIC_AUTH_USER / env.BASIC_AUTH_PASS (secrets,
+// unchanged), but the browser now signs in once on /login and gets a 30-day
+// session cookie instead of the native Basic Auth popup - which also fixes
+// the installed PWA hitting that popup on every cold launch. The cookie is
+// `<expiry>.<HMAC(expiry)>`, keyed by the credentials themselves: no session
+// table, no extra secret to set, and changing the password invalidates
+// every outstanding session. If the credentials aren't set (local `wrangler
+// dev` without `.dev.vars`) auth is skipped entirely, as before.
+
+const SESSION_COOKIE = "steady_session";
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+// Reachable signed-out: the login page itself, its endpoint, and what the
+// browser needs to recognise the app as installable before signing in.
+function isPublicPath(pathname) {
+  return (
+    pathname === "/login" || pathname === "/login.html" || pathname === "/api/login" ||
+    pathname === "/manifest.json" || pathname === "/sw.js" || pathname.startsWith("/icons/")
+  );
+}
+
+async function sessionSignature(env, expiry) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(`${env.BASIC_AUTH_USER}\n${env.BASIC_AUTH_PASS}`),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(`steady-session:${expiry}`)));
+  return btoa(String.fromCharCode(...mac)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function readCookie(request, name) {
+  for (const part of (request.headers.get("Cookie") || "").split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return v.join("=");
+  }
+  return null;
+}
+
+async function hasValidSession(request, env) {
+  const token = readCookie(request, SESSION_COOKIE);
+  if (!token) return false;
+  const [expiryStr, sig] = token.split(".");
+  const expiry = Number(expiryStr);
+  if (!Number.isInteger(expiry) || !sig || expiry < Date.now() / 1000) return false;
+  return timingSafeEqual(sig, await sessionSignature(env, expiry));
+}
+
+function sessionCookie(value, maxAge) {
+  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
 /**
  * This is a single-user personal tool sitting on a public workers.dev URL,
- * so every request (frontend and API) is gated behind HTTP Basic Auth.
- * Requires env.BASIC_AUTH_USER / env.BASIC_AUTH_PASS (secrets — see README).
- * If they aren't set — e.g. local `wrangler dev` without `.dev.vars` — auth
- * is skipped, since that's only reachable from localhost anyway.
+ * so every non-public request is gated. A valid session cookie is the normal
+ * path; an `Authorization: Basic` header is still accepted (constant-time
+ * compared) for scripted/curl access, but no `WWW-Authenticate` challenge is
+ * ever sent, so browsers never show the native popup.
  */
 async function checkAuth(request, env) {
   if (!env.BASIC_AUTH_USER) return true;
-  const header = request.headers.get("Authorization") || "";
+  if (await hasValidSession(request, env)) return true;
+  const header = request.headers.get("Authorization");
+  if (!header) return false;
   const expected = "Basic " + btoa(`${env.BASIC_AUTH_USER}:${env.BASIC_AUTH_PASS}`);
   return timingSafeEqual(header, expected);
 }
 
+// POST /api/login { username, password } -> sets the session cookie.
+// Both fields compared in constant time and both always compared (no early
+// exit on a wrong username); a failure waits a beat before answering, to
+// make guessing slower without needing any stored rate-limit state.
+async function handleLogin(request, env) {
+  if (!env.BASIC_AUTH_USER) return jsonResponse({ ok: true }); // auth disabled (local dev)
+  const body = await request.json().catch(() => ({}));
+  const userOk = await timingSafeEqual(String(body.username ?? ""), env.BASIC_AUTH_USER);
+  const passOk = await timingSafeEqual(String(body.password ?? ""), env.BASIC_AUTH_PASS);
+  if (!(userOk && passOk)) {
+    await new Promise((r) => setTimeout(r, 750));
+    return jsonResponse({ error: "Wrong username or password." }, { status: 401 });
+  }
+  const expiry = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
+  const token = `${expiry}.${await sessionSignature(env, expiry)}`;
+  return jsonResponse({ ok: true }, { headers: {
+    "content-type": "application/json; charset=utf-8",
+    "Set-Cookie": sessionCookie(token, SESSION_TTL_SECONDS),
+  } });
+}
+
 export default {
   async fetch(request, env) {
-    if (!(await checkAuth(request, env))) {
-      return new Response("Authentication required", {
-        status: 401,
-        headers: { "WWW-Authenticate": 'Basic realm="Steady"' },
-      });
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/login" && request.method === "POST") {
+      return handleLogin(request, env);
+    }
+    if (url.pathname === "/api/logout" && request.method === "POST") {
+      return jsonResponse({ ok: true }, { headers: {
+        "content-type": "application/json; charset=utf-8",
+        "Set-Cookie": sessionCookie("", 0),
+      } });
     }
 
-    const url = new URL(request.url);
+    const authed = await checkAuth(request, env);
+    // Already signed in (or auth disabled): skip straight past the login page.
+    if (authed && (url.pathname === "/login" || url.pathname === "/login.html")) {
+      return Response.redirect(new URL("/", url).toString(), 302);
+    }
+    if (!authed && !isPublicPath(url.pathname)) {
+      if (url.pathname.startsWith("/api/") || request.method !== "GET") {
+        // Plain 401, deliberately no WWW-Authenticate - the frontend sees
+        // this and sends the browser to /login itself.
+        return jsonResponse({ error: "authentication required" }, { status: 401 });
+      }
+      const login = new URL("/login", url);
+      if (url.pathname !== "/") login.searchParams.set("next", url.pathname + url.search);
+      return Response.redirect(login.toString(), 302);
+    }
+
     if (url.pathname.startsWith("/api/")) {
       try {
         return await handleApi(request, env, url);
