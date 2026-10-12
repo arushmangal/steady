@@ -59,6 +59,16 @@ due-today revisions into Todoist so you actually get notified.
 - Adding a topic can be backdated ("Studied earlier?") to log a session a
   few days late — the topic's next review is anchored to that date, so it
   correctly shows as overdue rather than freshly due today
+- A backlog can be bulk-imported (one topic per line) with staggered
+  first-review dates — N per day starting today, previewed before
+  importing — so loading old material doesn't make everything due the same
+  morning
+- A category can carry an exam date, making it a "course": no review for
+  any topic underneath is ever scheduled past two days before the exam, so
+  a final pass lands 2–3 days ahead of it (setting the date also pulls in
+  anything already scheduled too late). An "Exam readiness" panel shows,
+  per upcoming exam, how many topics were last rated 4+ and how many are
+  due again before it
 - Each topic has a toggleable edit mode (title, category, Todoist project
   override) with an explicit "Save changes?" confirmation before anything
   is written
