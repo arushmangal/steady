@@ -143,7 +143,7 @@ in the "Last sync" line in the UI rather than only ever logged).
 This app has no other access control, so if you deploy it to a public
 `workers.dev` URL, set these two secrets to require signing in on Steady's
 own login page (a 30-day signed session cookie afterwards, no browser
-popup; an `Authorization: Basic` header still works for scripted access):
+popup):
 
 ```
 wrangler secret put BASIC_AUTH_USER

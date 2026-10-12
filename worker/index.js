@@ -1375,18 +1375,16 @@ function sessionCookie(value, maxAge) {
 
 /**
  * This is a single-user personal tool sitting on a public workers.dev URL,
- * so every non-public request is gated. A valid session cookie is the normal
- * path; an `Authorization: Basic` header is still accepted (constant-time
- * compared) for scripted/curl access, but no `WWW-Authenticate` challenge is
- * ever sent, so browsers never show the native popup.
+ * so every non-public request is gated, and a valid session cookie is the
+ * ONLY way in. An `Authorization: Basic` header is deliberately NOT accepted:
+ * browsers that ever answered the old Basic Auth popup keep those
+ * credentials cached and silently attach them to every request, so honoring
+ * them meant "Sign out" cleared the cookie and the cached header signed you
+ * straight back in - signing out was impossible.
  */
 async function checkAuth(request, env) {
   if (!env.BASIC_AUTH_USER) return true;
-  if (await hasValidSession(request, env)) return true;
-  const header = request.headers.get("Authorization");
-  if (!header) return false;
-  const expected = "Basic " + btoa(`${env.BASIC_AUTH_USER}:${env.BASIC_AUTH_PASS}`);
-  return timingSafeEqual(header, expected);
+  return hasValidSession(request, env);
 }
 
 // POST /api/login { username, password } -> sets the session cookie.
