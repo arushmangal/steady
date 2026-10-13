@@ -466,6 +466,36 @@ async function reopenTodoistTask(env, taskId) {
   }
 }
 
+/**
+ * Fetches EVERY item from a paginated Todoist v1 list endpoint (the
+ * `{ results, next_cursor }` shape). These endpoints return one page at a
+ * time - 50 items by default - and every list call in this file used to
+ * read only that first page and drop `next_cursor`. That silently capped
+ * the project picker at 50 projects (the user's real account has more),
+ * and would equally have capped the steady-label import scan and a task's
+ * comment list. Asks for the maximum page size (200) to keep round-trips
+ * down, follows the cursor to the end, and throws on any non-OK page
+ * rather than returning a partial list that looks complete.
+ */
+async function todoistListAll(env, baseUrl) {
+  const all = [];
+  let cursor = null;
+  for (let page = 0; page < 50; page++) { // hard stop: 10,000 items, guards a cursor that never ends
+    const url = new URL(baseUrl);
+    url.searchParams.set("limit", "200");
+    if (cursor) url.searchParams.set("cursor", cursor);
+    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` } });
+    if (!res.ok) {
+      throw new Error(`Todoist list ${url.pathname} failed: ${res.status} ${await res.text()}`);
+    }
+    const body = await res.json();
+    all.push(...(body.results || []));
+    cursor = body.next_cursor;
+    if (!cursor) break;
+  }
+  return all;
+}
+
 async function handleApi(request, env, url, ctx) {
   const method = request.method;
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "topics", ...]
@@ -769,13 +799,12 @@ async function handleApi(request, env, url, ctx) {
     // this endpoint's response shape from a bare array to { results: [...] }
     // (pagination wrapper); task creation below was NOT similarly wrapped —
     // verified both shapes directly rather than assuming they moved together.
-    const res = await fetch("https://api.todoist.com/api/v1/projects", {
-      headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
-    });
-    if (!res.ok) {
+    let results;
+    try {
+      results = await todoistListAll(env, "https://api.todoist.com/api/v1/projects");
+    } catch (err) {
       return jsonResponse({ error: "failed to fetch Todoist projects" }, { status: 502 });
     }
-    const { results } = await res.json();
     return jsonResponse(results.map((p) => ({ id: p.id, name: p.name, parent_id: p.parent_id || null })));
   }
 
@@ -1102,13 +1131,7 @@ async function pushToTodoist(env, topic) {
 async function runInboundImport(env) {
   const steadyLabel = env.STEADY_LABEL || "steady";
   const revisionLabel = env.REVISION_LABEL || "review";
-  const res = await fetch(`https://api.todoist.com/api/v1/tasks?label=${encodeURIComponent(steadyLabel)}`, {
-    headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
-  });
-  if (!res.ok) {
-    throw new Error(`Todoist label search failed: ${res.status} ${await res.text()}`);
-  }
-  const { results } = await res.json();
+  const results = await todoistListAll(env, `https://api.todoist.com/api/v1/tasks?label=${encodeURIComponent(steadyLabel)}`);
 
   const tomorrow = nowIST();
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
@@ -1210,13 +1233,7 @@ async function runCompletionSync(env) {
       ).bind(task.id).first();
       if (!topic) continue; // not a task Steady is currently tracking - not a failure
 
-      const commentsRes = await fetch(`https://api.todoist.com/api/v1/comments?task_id=${task.id}`, {
-        headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}` },
-      });
-      if (!commentsRes.ok) {
-        throw new Error(`Failed to fetch comments for task ${task.id}: ${commentsRes.status} ${await commentsRes.text()}`);
-      }
-      const { results: comments } = await commentsRes.json();
+      const comments = await todoistListAll(env, `https://api.todoist.com/api/v1/comments?task_id=${task.id}`);
       comments.sort((a, b) => Date.parse(a.posted_at) - Date.parse(b.posted_at)); // don't trust implicit ordering
       const latest = comments.length ? comments[comments.length - 1] : null;
       const match = latest ? latest.content.match(/\b[0-5]\b/) : null;
