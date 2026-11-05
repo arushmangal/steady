@@ -98,3 +98,32 @@ CREATE TABLE IF NOT EXISTS sync_log (
   detail     TEXT                        -- last error message, if any
 );
 CREATE INDEX IF NOT EXISTS idx_sync_log_operation_id ON sync_log(operation, id);
+
+-- Flashcards. One row per card; scheduled like topics (SM-2, exam cap) but
+-- each card is a single fact, so reviews take seconds, not minutes.
+-- state: 'staged'  waiting its turn (new cards are released a few per day,
+--                  never all at once - the guard against flashcard hell)
+--        'active'  introduced and scheduled
+--        'leech'   forgotten LEECH_LAPSES times: parked until rewritten
+-- Existing live DBs: running this file again is enough (CREATE IF NOT EXISTS).
+CREATE TABLE IF NOT EXISTS cards (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  category_id   INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  topic_id      INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+  front         TEXT NOT NULL,
+  back          TEXT NOT NULL DEFAULT '',
+  image         TEXT,                -- optional data: URL shown on the back (graphs, figures)
+  state         TEXT NOT NULL DEFAULT 'staged',
+  ef            REAL NOT NULL DEFAULT 2.5,
+  interval_days INTEGER NOT NULL DEFAULT 0,
+  repetitions   INTEGER NOT NULL DEFAULT 0,
+  lapses        INTEGER NOT NULL DEFAULT 0,
+  last_quality  INTEGER,
+  due           TEXT,                -- ISO date; NULL while staged
+  last_reviewed TEXT,
+  introduced_at TEXT,                -- ISO date it left staging
+  created_on    TEXT NOT NULL,       -- ISO date (IST) it was added
+  batch         TEXT                 -- groups cards added together
+);
+CREATE INDEX IF NOT EXISTS idx_cards_due ON cards(state, due);
+CREATE INDEX IF NOT EXISTS idx_cards_category_id ON cards(category_id);

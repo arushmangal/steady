@@ -21,6 +21,16 @@
  *   GET    /api/sync-status         last cron-driven Todoist operation of each kind (push/import/completion_sync)
  *   POST   /api/push-now            manually run just the push operation on demand (bypasses the cron's daily wait)
  *   POST   /api/completion-sync-now manually run just the Todoist -> Steady completion sync on demand
+ *   GET    /api/cards/summary       flashcard counts, per-course solidity, 14-day load
+ *   GET    /api/cards/queue         releases today's new cards (paced), returns everything due
+ *   GET    /api/cards               list cards ?state=leech|staged|active&category_id=
+ *   GET    /api/cards/export        Anki-importable TSV of every card
+ *   POST   /api/cards/bulk          add cards { cards: [{front, back, image?}], category_id?, topic_id?, confirm? } - big batches come back needs_confirm with lint + load projection until re-sent with confirm
+ *   POST   /api/cards/:id           edit a card { front, back, category_id? }
+ *   POST   /api/cards/:id/review    { quality: 1|3|4|5 } -> SM-2, exam-capped; 4th lapse parks the card as a leech
+ *   POST   /api/cards/:id/revive    rewrite a leech { front, back } and put it back in rotation
+ *   DELETE /api/cards/:id           delete a card
+ *   POST   /api/rebalance           run the automatic load levelling now (it also runs by itself)
  *   POST   /api/login               { username, password } -> 30-day signed session cookie (public; see checkAuth)
  *   POST   /api/logout              clears the session cookie
  *
@@ -53,6 +63,11 @@
 // CLAUDE.md. Every "what day is it" calculation anchors on IST, not raw UTC,
 // otherwise the app thinks it's still yesterday until 5:30am IST. If the
 // user's timezone ever changes, this constant is the one place to update.
+import {
+  rebalance, peakOf, lintCards, projectLoad, needsRecheck, planRelease,
+  daysBetween, LEECH_LAPSES, CONFIRM_BATCH, CONFIRM_DAILY, PEAK_WARN, NEW_PER_DAY, NEW_MAX, BACKLOG_PAUSE,
+} from "./plan.js";
+
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const nowIST = () => new Date(Date.now() + IST_OFFSET_MS);
 const todayISO = () => nowIST().toISOString().slice(0, 10);
@@ -145,6 +160,22 @@ async function reclampAllTopics(env) {
     if (cap && t.next_due > cap) {
       updates.push(env.DB.prepare(`UPDATE topics SET next_due = ? WHERE id = ?`).bind(cap, t.id));
     }
+  }
+  if (updates.length) await env.DB.batch(updates);
+  await reclampAllCards(env);
+}
+
+// Same exam cap, applied to flashcards (see reclampAllTopics).
+async function reclampAllCards(env) {
+  const categoryMap = await loadCategoryMap(env);
+  const { results } = await env.DB.prepare(
+    `SELECT id, category_id, due, last_reviewed FROM cards WHERE state = 'active' AND category_id IS NOT NULL`
+  ).all();
+  const today = todayISO();
+  const updates = [];
+  for (const c of results) {
+    const cap = examCapDate(examDatesFor(categoryMap, c.category_id), c.last_reviewed, today);
+    if (cap && c.due > cap) updates.push(env.DB.prepare(`UPDATE cards SET due = ? WHERE id = ?`).bind(cap, c.id));
   }
   if (updates.length) await env.DB.batch(updates);
 }
@@ -496,12 +527,194 @@ async function todoistListAll(env, baseUrl) {
   return all;
 }
 
+// --- Automatic load levelling ------------------------------------------------
+// Runs by itself (daily cron, a catch-up on the first open of a day if the
+// cron missed, and after an exam date changes). Nothing for the user to
+// trigger. Spreads a missed day's backlog over the next week and sheds
+// overloaded days onto lighter ones, never past an exam cap. See
+// rebalance() in plan.js for the rules. Topics and cards are levelled
+// separately: a topic is a study session, a card is a few seconds.
+
+async function moveTodoistTaskDue(env, taskId, date) {
+  const res = await fetch(`https://api.todoist.com/api/v1/tasks/${taskId}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.TODOIST_API_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ due_date: date }),
+  });
+  if (!res.ok) throw new Error(`Failed to move Todoist task ${taskId}: ${res.status} ${await res.text()}`);
+}
+
+async function runRebalance(env, { lockToday = false } = {}) {
+  const today = todayISO();
+  const categoryMap = await loadCategoryMap(env);
+  const reach = shiftISO(today, 21); // movable window (14 days) + slack, also counted as load
+
+  const { results: topics } = await env.DB.prepare(
+    `SELECT id, category_id, next_due, interval_days, ef, last_reviewed, todoist_task_id
+       FROM topics WHERE archived = 0 AND next_due <= ?`
+  ).bind(reach).all();
+  const topicRes = rebalance(
+    topics.map((t) => ({
+      key: t.id,
+      due: t.next_due,
+      interval: t.interval_days,
+      cap: t.category_id ? examCapDate(examDatesFor(categoryMap, t.category_id), t.last_reviewed, today) : null,
+      weak: t.ef < 2.0,
+    })),
+    today,
+    { lockToday }
+  );
+
+  const { results: cards } = await env.DB.prepare(
+    `SELECT id, category_id, due, interval_days, ef, lapses, last_quality, repetitions, last_reviewed
+       FROM cards WHERE state = 'active' AND due <= ?`
+  ).bind(reach).all();
+  const cardRes = rebalance(
+    cards.map((c) => ({
+      key: c.id,
+      due: c.due,
+      interval: c.interval_days,
+      cap: c.category_id ? examCapDate(examDatesFor(categoryMap, c.category_id), c.last_reviewed, today) : null,
+      weak: c.ef < 2.0 || c.lapses >= 2 || (c.last_quality != null && c.last_quality <= 3),
+      fixed: c.repetitions === 0 && !c.last_reviewed, // released today, never moved
+    })),
+    today,
+    { lockToday }
+  );
+
+  const statements = [
+    ...topicRes.moves.map((m) => env.DB.prepare(`UPDATE topics SET next_due = ? WHERE id = ?`).bind(m.to, m.key)),
+    ...cardRes.moves.map((m) => env.DB.prepare(`UPDATE cards SET due = ? WHERE id = ?`).bind(m.to, m.key)),
+  ];
+  // D1 batches are fine at this scale, but keep each one modest.
+  for (let i = 0; i < statements.length; i += 50) await env.DB.batch(statements.slice(i, i + 50));
+
+  // A topic with an open Todoist task keeps that task: move its due date too,
+  // so Todoist and Steady agree about when the review is.
+  let failed = 0;
+  if (env.TODOIST_API_TOKEN) {
+    const byId = Object.fromEntries(topics.map((t) => [t.id, t]));
+    for (const m of topicRes.moves) {
+      const taskId = byId[m.key]?.todoist_task_id;
+      if (!taskId) continue;
+      try {
+        await moveTodoistTaskDue(env, taskId, m.to);
+      } catch (err) {
+        console.error(String(err));
+        failed++;
+      }
+    }
+  }
+
+  const tb = peakOf(topicRes.loadBefore), ta = peakOf(topicRes.loadAfter);
+  const cb = peakOf(cardRes.loadBefore), ca = peakOf(cardRes.loadAfter);
+  const detail =
+    topicRes.moves.length + cardRes.moves.length === 0
+      ? "Schedule already balanced."
+      : `Moved ${topicRes.moves.length} topic(s) and ${cardRes.moves.length} card(s) to lighter days. ` +
+        `Busiest day: topics ${tb.peak} -> ${ta.peak}, cards ${cb.peak} -> ${ca.peak}.`;
+  return { succeeded: topicRes.moves.length + cardRes.moves.length, failed, detail };
+}
+
+// If the daily cron didn't run (or failed) today, do it on first open instead.
+// Idempotent, so a race between two tabs is harmless.
+async function ensureDailyRebalance(env) {
+  const row = await env.DB.prepare(
+    `SELECT date(run_at, '+330 minutes') AS day FROM sync_log WHERE operation = 'rebalance' AND ok = 1 ORDER BY id DESC LIMIT 1`
+  ).first();
+  if (row?.day === todayISO()) return;
+  await runOperation(env, "rebalance", runRebalance);
+}
+
+// --- Flashcards ---------------------------------------------------------------
+
+const CARD_COLS = `id, category_id, topic_id, front, back, state, ef, interval_days, repetitions, lapses,
+  last_quality, due, last_reviewed, introduced_at, created_on, batch, (image IS NOT NULL) AS has_image`;
+
+function earliestExam(categoryMap, categoryId, today) {
+  if (!categoryId) return null;
+  return examDatesFor(categoryMap, categoryId).filter((d) => d >= today).sort()[0] || null;
+}
+
+// Moves a few staged cards into rotation each day - see planRelease() for
+// the pacing rules. Called whenever the study queue is fetched, so it needs
+// no cron of its own.
+async function releaseNewCards(env) {
+  const today = todayISO();
+  const categoryMap = await loadCategoryMap(env);
+  const { results: staged } = await env.DB.prepare(
+    `SELECT id, category_id FROM cards WHERE state = 'staged' ORDER BY id`
+  ).all();
+  if (!staged.length) return { released: 0, paused: false };
+  const introduced = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM cards WHERE introduced_at = ?`).bind(today).first()).n;
+  const dueNow = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM cards WHERE state = 'active' AND due <= ?`).bind(today).first()).n;
+  const plan = planRelease({
+    staged: staged.map((c) => ({ id: c.id, exam: earliestExam(categoryMap, c.category_id, today) })),
+    introducedToday: introduced,
+    dueNow,
+    today,
+  });
+  if (plan.ids.length) {
+    await env.DB.batch(
+      plan.ids.map((id) =>
+        env.DB.prepare(`UPDATE cards SET state = 'active', due = ?, introduced_at = ? WHERE id = ?`).bind(today, today, id)
+      )
+    );
+  }
+  return { released: plan.ids.length, paused: plan.paused };
+}
+
+/**
+ * Applies a review to a card. Uses the same sm2() and exam cap as topics,
+ * plus one flashcard-only rule: with an exam ahead, a card is never pushed
+ * further than half the time left before its final pass, so every card gets
+ * at least two more looks before the exam instead of one long jump.
+ * Quality is 1 (again), 3 (hard), 4 (good) or 5 (easy).
+ */
+async function applyCardReview(env, id, quality) {
+  const card = await env.DB.prepare(`SELECT * FROM cards WHERE id = ?`).bind(id).first();
+  if (!card || card.state !== "active") return null;
+  const today = todayISO();
+  const elapsed = card.last_reviewed ? daysBetween(card.last_reviewed, today) : 0;
+  const after = sm2(
+    { ef: card.ef, interval_days: card.interval_days, repetitions: card.repetitions },
+    quality,
+    elapsed
+  );
+  let due = after.next_due;
+  if (card.category_id) {
+    const cap = examCapDate(examDatesFor(await loadCategoryMap(env), card.category_id), today, today);
+    if (cap) {
+      const left = daysBetween(today, cap);
+      if (left >= 4) {
+        const limit = shiftISO(today, Math.floor(left / 2));
+        if (due > limit) due = limit;
+      }
+      if (due > cap) due = cap;
+    }
+  }
+  const lapses = card.lapses + (quality < 3 ? 1 : 0);
+  const state = lapses >= LEECH_LAPSES ? "leech" : "active";
+  await env.DB.prepare(
+    `UPDATE cards SET ef = ?, interval_days = ?, repetitions = ?, due = ?, lapses = ?, last_quality = ?,
+                       last_reviewed = ?, state = ? WHERE id = ?`
+  ).bind(after.ef, after.interval_days, after.repetitions, due, lapses, quality, today, state, id).run();
+  return env.DB.prepare(`SELECT ${CARD_COLS} FROM cards WHERE id = ?`).bind(id).first();
+}
+
+const isSolid = (c) => c.state === "active" && c.repetitions >= 3 && (c.last_quality ?? 0) >= 4;
+
+function tsvCell(s) {
+  return String(s ?? "").replace(/\t/g, " ").replace(/\r?\n/g, "<br>");
+}
+
 async function handleApi(request, env, url, ctx) {
   const method = request.method;
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "topics", ...]
 
   // GET /api/topics
   if (method === "GET" && parts.length === 2 && parts[1] === "topics") {
+    await ensureDailyRebalance(env);
     const { results } = await env.DB.prepare(
       `SELECT * FROM topics WHERE archived = 0 ORDER BY next_due ASC`
     ).all();
@@ -758,6 +971,9 @@ async function handleApi(request, env, url, ctx) {
     // changes the cap on every topic underneath - apply it now, not only at
     // each topic's next review.
     await reclampAllTopics(env);
+    // An exam date can make a week suddenly tight: level it right away (what is
+    // already due today stays put) instead of waiting for tomorrow's run.
+    await runOperation(env, "rebalance", (e) => runRebalance(e, { lockToday: true }));
     const updated = await env.DB.prepare(`SELECT * FROM categories WHERE id = ?`).bind(id).first();
     return jsonResponse(updated);
   }
@@ -812,7 +1028,7 @@ async function handleApi(request, env, url, ctx) {
   // so a silent failure shows up in the UI instead of only in the Worker's
   // own logs. `null` for an operation that hasn't shipped/run yet.
   if (method === "GET" && parts.length === 2 && parts[1] === "sync-status") {
-    const operations = ["push", "import", "completion_sync"];
+    const operations = ["rebalance", "push", "import", "completion_sync"];
     const result = {};
     for (const operation of operations) {
       const row = await env.DB.prepare(
@@ -973,6 +1189,211 @@ async function handleApi(request, env, url, ctx) {
       (days[r.next_due] ||= []).push({ id: r.id, title: r.title });
     }
     return jsonResponse({ month, days });
+  }
+
+  // ---- Flashcards ---------------------------------------------------------
+
+  // GET /api/cards/summary
+  if (method === "GET" && parts.length === 3 && parts[1] === "cards" && parts[2] === "summary") {
+    const today = todayISO();
+    const categoryMap = await loadCategoryMap(env);
+    const { results: all } = await env.DB.prepare(`SELECT ${CARD_COLS} FROM cards`).all();
+    const active = all.filter((c) => c.state === "active");
+    const staged = all.filter((c) => c.state === "staged");
+    const hist = {};
+    for (const c of active) if (c.due) hist[c.due < today ? today : c.due] = (hist[c.due < today ? today : c.due] || 0) + 1;
+    const load = Array.from({ length: 14 }, (_, i) => ({ day: shiftISO(today, i), count: hist[shiftISO(today, i)] || 0 }));
+    const dueNow = active.filter((c) => c.due <= today).length;
+    const introducedToday = all.filter((c) => c.introduced_at === today).length;
+    const plan = planRelease({
+      staged: staged.map((c) => ({ id: c.id, exam: earliestExam(categoryMap, c.category_id, today) })),
+      introducedToday: 0, dueNow, today,
+    });
+    const byCat = {};
+    for (const c of all) {
+      const row = (byCat[c.category_id ?? 0] ||= { category_id: c.category_id, total: 0, solid: 0, shaky: 0, staged: 0, leeches: 0 });
+      row.total++;
+      if (c.state === "staged") row.staged++;
+      else if (c.state === "leech") row.leeches++;
+      else if (isSolid(c)) row.solid++;
+      else row.shaky++;
+    }
+    for (const row of Object.values(byCat)) {
+      row.exam_date = earliestExam(categoryMap, row.category_id, today);
+      // staged cards of a course whose exam is within a week will not get
+      // enough looks: say so instead of letting them sit there silently.
+      row.too_late = row.exam_date && daysBetween(today, row.exam_date) <= 7
+        ? staged.filter((c) => c.category_id === row.category_id).length : 0;
+    }
+    return jsonResponse({
+      due_now: dueNow,
+      overdue: active.filter((c) => c.due < today).length,
+      staged: staged.length,
+      leeches: all.filter((c) => c.state === "leech").length,
+      introduced_today: introducedToday,
+      new_per_day: NEW_PER_DAY,
+      paused: dueNow >= BACKLOG_PAUSE,
+      next_release: plan.ids.length,
+      load,
+      courses: Object.values(byCat),
+    });
+  }
+
+  // GET /api/cards/queue — release today's new cards, then everything due.
+  if (method === "GET" && parts.length === 3 && parts[1] === "cards" && parts[2] === "queue") {
+    await ensureDailyRebalance(env);
+    const rel = await releaseNewCards(env);
+    const { results } = await env.DB.prepare(
+      `SELECT id, category_id, front, back, image, repetitions, lapses
+         FROM cards WHERE state = 'active' AND due <= ? ORDER BY due ASC, id ASC LIMIT 200`
+    ).bind(todayISO()).all();
+    return jsonResponse({ cards: results, released: rel.released, paused: rel.paused });
+  }
+
+  // GET /api/cards/export — Anki-importable: tab-separated Front, Back, Tags.
+  if (method === "GET" && parts.length === 3 && parts[1] === "cards" && parts[2] === "export") {
+    const { results } = await env.DB.prepare(
+      `SELECT c.front, c.back, c.image, cat.name AS category FROM cards c
+         LEFT JOIN categories cat ON cat.id = c.category_id ORDER BY c.id`
+    ).all();
+    const lines = ["#separator:tab", "#html:true", "#tags column:3"];
+    for (const r of results) {
+      const back = tsvCell(r.back) + (r.image ? `<br><img src="${r.image}">` : "");
+      lines.push([tsvCell(r.front), back, (r.category || "steady").replace(/\s+/g, "_")].join("\t"));
+    }
+    return new Response(lines.join("\n") + "\n", {
+      headers: {
+        "content-type": "text/tab-separated-values; charset=utf-8",
+        "content-disposition": 'attachment; filename="steady-cards.txt"',
+      },
+    });
+  }
+
+  // GET /api/cards?state=&category_id=
+  if (method === "GET" && parts.length === 2 && parts[1] === "cards") {
+    const state = url.searchParams.get("state");
+    const cat = url.searchParams.get("category_id");
+    const where = [];
+    const binds = [];
+    if (state) { where.push("state = ?"); binds.push(state); }
+    if (cat) { where.push("category_id = ?"); binds.push(Number(cat)); }
+    const { results } = await env.DB.prepare(
+      `SELECT ${CARD_COLS} FROM cards ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY id DESC LIMIT 300`
+    ).bind(...binds).all();
+    return jsonResponse(results);
+  }
+
+  // POST /api/cards/bulk — the gate lives here, not in the UI, so a script or
+  // stale tab can't flood the deck either.
+  if (method === "POST" && parts.length === 3 && parts[1] === "cards" && parts[2] === "bulk") {
+    const body = await request.json();
+    const incoming = Array.isArray(body.cards) ? body.cards : null;
+    if (!incoming || !incoming.length) return jsonResponse({ error: "cards must be a non-empty array" }, { status: 400 });
+    if (incoming.length > 200) return jsonResponse({ error: "at most 200 cards per add" }, { status: 400 });
+    const category = await resolveValidCategoryId(env, body.category_id);
+    if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
+    const cards = [];
+    for (const c of incoming) {
+      const front = typeof c?.front === "string" ? c.front.trim() : "";
+      const back = typeof c?.back === "string" ? c.back.trim() : "";
+      const image = typeof c?.image === "string" && c.image.startsWith("data:image/") ? c.image : null;
+      if (image && image.length > 400000) return jsonResponse({ error: "an image is over 400 KB" }, { status: 400 });
+      if (!front || (!back && !image)) return jsonResponse({ error: "every card needs a front and a back" }, { status: 400 });
+      cards.push({ front, back, image });
+    }
+    const today = todayISO();
+    const addedToday = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM cards WHERE created_on = ?`).bind(today).first()).n;
+    const { results: existing } = await env.DB.prepare(`SELECT front FROM cards`).all();
+    const lint = lintCards(cards, existing.map((e) => e.front));
+
+    if (needsRecheck(cards.length, addedToday) && body.confirm !== true) {
+      const { results: hist } = await env.DB.prepare(
+        `SELECT due, COUNT(*) AS n FROM cards WHERE state = 'active' AND due IS NOT NULL GROUP BY due`
+      ).all();
+      const stagedNow = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM cards WHERE state = 'staged'`).first()).n;
+      // With an exam inside 14 days, cards are released at the faster pace
+      // (see planRelease), so project at that pace.
+      const exam = earliestExam(await loadCategoryMap(env), category.id, today);
+      const perDay = exam && daysBetween(today, exam) <= 14 ? NEW_MAX : NEW_PER_DAY;
+      const projection = projectLoad(
+        Object.fromEntries(hist.map((h) => [h.due < today ? today : h.due, h.n])),
+        stagedNow + cards.length, today, perDay
+      );
+      projection.per_day = perDay;
+      return jsonResponse({
+        needs_confirm: true,
+        added_today: addedToday,
+        batch_limit: CONFIRM_BATCH,
+        daily_limit: CONFIRM_DAILY,
+        projection: { ...projection, warn: projection.peak > PEAK_WARN },
+        lint,
+      });
+    }
+
+    const batch = `${today}-${Math.random().toString(36).slice(2, 8)}`;
+    await env.DB.batch(
+      cards.map((c) =>
+        env.DB.prepare(
+          `INSERT INTO cards (category_id, topic_id, front, back, image, state, created_on, batch)
+           VALUES (?, ?, ?, ?, ?, 'staged', ?, ?)`
+        ).bind(category.id, body.topic_id ? Number(body.topic_id) : null, c.front, c.back, c.image, today, batch)
+      )
+    );
+    const rel = await releaseNewCards(env);
+    return jsonResponse({ created: cards.length, released_now: rel.released, lint }, { status: 201 });
+  }
+
+  // POST /api/cards/:id/review
+  if (method === "POST" && parts.length === 4 && parts[1] === "cards" && parts[3] === "review") {
+    const body = await request.json();
+    if (![1, 3, 4, 5].includes(body.quality)) return jsonResponse({ error: "quality must be 1, 3, 4 or 5" }, { status: 400 });
+    const card = await applyCardReview(env, Number(parts[2]), body.quality);
+    if (!card) return jsonResponse({ error: "not found or not active" }, { status: 404 });
+    return jsonResponse(card);
+  }
+
+  // POST /api/cards/:id/revive — rewrite a leech and put it back in rotation.
+  if (method === "POST" && parts.length === 4 && parts[1] === "cards" && parts[3] === "revive") {
+    const body = await request.json();
+    const front = typeof body.front === "string" ? body.front.trim() : "";
+    const back = typeof body.back === "string" ? body.back.trim() : "";
+    if (!front || !back) return jsonResponse({ error: "front and back are required" }, { status: 400 });
+    const res = await env.DB.prepare(
+      `UPDATE cards SET front = ?, back = ?, state = 'active', lapses = 0, repetitions = 0, interval_days = 0,
+                         ef = 2.5, due = ?, last_quality = NULL WHERE id = ? AND state = 'leech'`
+    ).bind(front, back, todayISO(), Number(parts[2])).run();
+    if (!res.meta.changes) return jsonResponse({ error: "not found or not a leech" }, { status: 404 });
+    return jsonResponse({ ok: true });
+  }
+
+  // POST /api/cards/:id — edit
+  if (method === "POST" && parts.length === 3 && parts[1] === "cards") {
+    const body = await request.json();
+    const front = typeof body.front === "string" ? body.front.trim() : "";
+    const back = typeof body.back === "string" ? body.back.trim() : "";
+    if (!front) return jsonResponse({ error: "front is required" }, { status: 400 });
+    const category = await resolveValidCategoryId(env, body.category_id);
+    if (!category.ok) return jsonResponse({ error: category.error }, { status: 400 });
+    const res = await env.DB.prepare(`UPDATE cards SET front = ?, back = ?, category_id = ? WHERE id = ?`)
+      .bind(front, back, category.id, Number(parts[2])).run();
+    if (!res.meta.changes) return jsonResponse({ error: "not found" }, { status: 404 });
+    await reclampAllCards(env);
+    return jsonResponse({ ok: true });
+  }
+
+  // DELETE /api/cards/:id
+  if (method === "DELETE" && parts.length === 3 && parts[1] === "cards") {
+    await env.DB.prepare(`DELETE FROM cards WHERE id = ?`).bind(Number(parts[2])).run();
+    return jsonResponse({ ok: true });
+  }
+
+  // POST /api/rebalance — manual run of what already happens automatically.
+  if (method === "POST" && parts.length === 2 && parts[1] === "rebalance") {
+    await runOperation(env, "rebalance", (e) => runRebalance(e, { lockToday: true }));
+    const row = await env.DB.prepare(
+      `SELECT run_at, ok, succeeded, failed, detail FROM sync_log WHERE operation = 'rebalance' ORDER BY id DESC LIMIT 1`
+    ).first();
+    return jsonResponse({ ...row, ok: !!row.ok });
   }
 
   return jsonResponse({ error: "not found" }, { status: 404 });
@@ -1296,10 +1717,10 @@ async function runDailyPush(env) {
 // console.error nobody's watching.
 async function runOperation(env, operation, fn) {
   try {
-    const { succeeded, failed } = await fn(env);
+    const { succeeded, failed, detail } = await fn(env);
     await env.DB.prepare(
-      `INSERT INTO sync_log (operation, ok, succeeded, failed) VALUES (?, 1, ?, ?)`
-    ).bind(operation, succeeded, failed).run();
+      `INSERT INTO sync_log (operation, ok, succeeded, failed, detail) VALUES (?, 1, ?, ?, ?)`
+    ).bind(operation, succeeded, failed, detail ?? null).run();
   } catch (err) {
     try {
       await env.DB.prepare(
@@ -1312,6 +1733,9 @@ async function runOperation(env, operation, fn) {
 }
 
 async function runScheduledSync(env) {
+  // Level the load first (so a missed day's backlog is spread out), then push
+  // what ends up due today.
+  await runOperation(env, "rebalance", runRebalance);
   await runOperation(env, "push", runDailyPush);
   await runOperation(env, "import", runInboundImport);
   await runOperation(env, "completion_sync", runCompletionSync);

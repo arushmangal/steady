@@ -45,6 +45,33 @@ due-today revisions into Todoist so you actually get notified.
   health, next to "Push now" and "Sync now" buttons that run just the push
   or just the completion-sync operation immediately instead of waiting for
   the daily cron
+- **Flashcards**, for facts that have to be recalled instantly (a formula, a
+  graph) rather than whole topics. Each card is scheduled with the same SM-2
+  and the same exam cap as topics, plus one rule of its own: with an exam
+  ahead, a card is never pushed further than half the time left before its
+  final pass, so every card gets at least two more looks before the exam.
+  Study from the Flashcards panel (`space` shows the answer, `1`–`4` rate it);
+  an "Again" card comes back in the same sitting. A card forgotten four times
+  is parked as a leech and listed for rewriting instead of being repeated
+  forever. A course shows how many of its cards are solid vs still shaky, and
+  warns when queued cards can't get enough looks before the exam. Everything
+  exports to Anki (tab-separated, `/api/cards/export`).
+- **Guard against flashcard hell.** New cards never all go live at once: they
+  are queued and introduced about 10 a day (up to 25 when an exam is within
+  two weeks), and none at all while 60+ reviews are already due. Adding more
+  than 8 cards in one go, or more than 20 in a day, opens a recheck screen
+  (enforced by the Worker, not just the UI): each card is linted (long
+  backs, lists, two questions in one, near-duplicates), flagged ones start
+  unticked, and it shows the projected busiest day before anything is added.
+  A starter pack lives in `packs/` and imports through the same screen.
+- **Automatic load levelling.** Nobody has to ask for it. Each morning (and
+  on first open if the cron missed) Steady spreads missed-day backlog over the
+  next week and moves reviews off overloaded days onto lighter ones, within
+  about 20% of each item's interval and never past an exam cap. Weak items
+  are delayed least; an already even schedule is left alone. Topics and
+  flashcards are levelled separately. If a topic has an open Todoist task,
+  its due date is moved too. "Auto-balanced: …" appears under the heatmap
+  when it moved anything, and `POST /api/rebalance` runs it on demand.
 - A forward-looking, clickable calendar (review directly from a due day)
   and a 28-day activity heatmap, alongside the flat/grouped topic list
 - Each topic gets a short, plain-language read on its recent review
@@ -90,7 +117,10 @@ due-today revisions into Todoist so you actually get notified.
 ## Repo layout
 
 ```
-worker/index.js       Worker: API routes, SM-2 scheduling, Todoist cron push
+worker/index.js       Worker: API routes, SM-2 scheduling, Todoist cron push, flashcard routes
+worker/plan.js        Pure scheduling logic: load levelling, card lint/projection/release pacing
+worker/plan.test.js   Tests for plan.js (run: node --test worker/plan.test.js)
+packs/                Importable flashcard packs (JSON)
 public/index.html     Frontend (served as static assets by the same Worker)
 schema.sql            D1 schema
 wrangler.toml.example Worker config template — copy to wrangler.toml and fill in
@@ -126,6 +156,10 @@ table that already exists. If a future change adds a column to an existing
 table (like `topics.category_id` did), that needs a one-off manual
 `ALTER TABLE`, documented in `CLAUDE.md` at the time it happens — check
 there before assuming re-running `schema.sql` alone is enough.
+
+For the flashcards update on an existing database, run that same command
+again: the new `cards` table is `CREATE TABLE IF NOT EXISTS`, so nothing
+existing is touched.
 
 **3. Set your Todoist project**
 
