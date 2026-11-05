@@ -2561,7 +2561,7 @@
       const shakyPct = c.total ? (c.shaky / c.total) * 100 : 0;
       const exam = c.exam_date ? `exam in ${fcDaysTo(c.exam_date)} day${fcDaysTo(c.exam_date) === 1 ? '' : 's'}` : 'no exam date';
       parts.push(`<div class="fc-course">
-        <div class="fc-course-head"><b>${escapeHtml(c.category_id ? fcCatName(c.category_id) : 'Uncategorized')}</b><span>${c.solid} solid · ${c.shaky} still shaky${c.staged ? ` · ${c.staged} queued` : ''} · ${exam}</span></div>
+        <div class="fc-course-head"><b>${escapeHtml(c.category_id ? fcCatName(c.category_id) : 'Uncategorized')}</b><span>${c.solid} solid · ${c.shaky} still learning${c.staged ? ` · ${c.staged} queued` : ''} · ${exam}</span></div>
         <div class="fc-meter"><i class="solid" style="width:${solidPct}%"></i><i class="shaky" style="width:${shakyPct}%"></i></div>
         ${c.too_late ? `<div class="fc-note warn">${c.too_late} queued card${c.too_late === 1 ? '' : 's'} won’t get enough looks before the exam. Drop the least important ones.</div>` : ''}
         ${live === 0 && !c.staged ? '' : ''}
@@ -2617,12 +2617,10 @@
     if (!s || s.busy || !s.queue.length) return;
     s.busy = true;
     const c = s.queue[0];
-    // The first look is the one that schedules the card. A second look in the
-    // same sitting after "Again" is only practice, so it is not sent.
-    if (!c.__again) {
-      const r = await apiPost(`/cards/${c.id}/review`, 'POST', { quality: q });
-      if (!r.ok) { s.error = 'Couldn’t save that rating. Check your connection and try again.'; s.busy = false; renderFcStudy(); return; }
-    }
+    // Every rating is saved. "Again" keeps the card due today on the server, so
+    // it comes back even if this window is closed; it leaves once answered Hard+.
+    const r = await apiPost(`/cards/${c.id}/review`, 'POST', { quality: q });
+    if (!r.ok) { s.error = 'Couldn’t save that rating. Check your connection and try again.'; s.busy = false; renderFcStudy(); return; }
     s.error = '';
     s.queue.shift();
     if (q === 1) { c.__again = true; if (!c.__counted) { s.again++; c.__counted = true; } s.queue.push(c); }

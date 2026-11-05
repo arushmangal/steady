@@ -636,6 +636,16 @@ function earliestExam(categoryMap, categoryId, today) {
   return examDatesFor(categoryMap, categoryId).filter((d) => d >= today).sort()[0] || null;
 }
 
+// Cards answered "Again" earlier today by an older build were scheduled for
+// tomorrow, which silently dropped them from today's queue. Put them back.
+// Idempotent, and a no-op once every Again is stored as due today.
+async function healAgainCards(env) {
+  const today = todayISO();
+  await env.DB.prepare(
+    `UPDATE cards SET due = ? WHERE state = 'active' AND last_quality = 1 AND last_reviewed = ? AND due > ?`
+  ).bind(today, today, today).run();
+}
+
 // Moves a few staged cards into rotation each day - see planRelease() for
 // the pacing rules. Called whenever the study queue is fetched, so it needs
 // no cron of its own.
@@ -681,19 +691,28 @@ async function applyCardReview(env, id, quality) {
     quality,
     elapsed
   );
+  // A repeat "Again" in the same sitting must not keep punishing the card.
+  const sameDayAgain = quality < 3 && card.last_quality === 1 && card.last_reviewed === today;
+  if (sameDayAgain) after.ef = card.ef;
   let due = after.next_due;
+  // "Again" is a learning step, not a verdict: the card stays due today, on the
+  // server, so closing the window (or reloading) can never lose it. It leaves
+  // today's queue only once it has been answered Hard or better.
+  if (quality < 3) due = today;
   if (card.category_id) {
     const cap = examCapDate(examDatesFor(await loadCategoryMap(env), card.category_id), today, today);
     if (cap) {
       const left = daysBetween(today, cap);
-      if (left >= 4) {
+      if (quality >= 3 && left >= 4) {
         const limit = shiftISO(today, Math.floor(left / 2));
         if (due > limit) due = limit;
       }
       if (due > cap) due = cap;
     }
   }
-  const lapses = card.lapses + (quality < 3 ? 1 : 0);
+  // A lapse is forgetting something already learned, counted once a day. A new
+  // card failed a few times in its first sitting is just being learned.
+  const lapses = card.lapses + (quality < 3 && card.repetitions > 0 && card.last_reviewed !== today ? 1 : 0);
   const state = lapses >= LEECH_LAPSES ? "leech" : "active";
   await env.DB.prepare(
     `UPDATE cards SET ef = ?, interval_days = ?, repetitions = ?, due = ?, lapses = ?, last_quality = ?,
@@ -1196,6 +1215,7 @@ async function handleApi(request, env, url, ctx) {
   // GET /api/cards/summary
   if (method === "GET" && parts.length === 3 && parts[1] === "cards" && parts[2] === "summary") {
     const today = todayISO();
+    await healAgainCards(env);
     const categoryMap = await loadCategoryMap(env);
     const { results: all } = await env.DB.prepare(`SELECT ${CARD_COLS} FROM cards`).all();
     const active = all.filter((c) => c.state === "active");
@@ -1242,6 +1262,7 @@ async function handleApi(request, env, url, ctx) {
   // GET /api/cards/queue — release today's new cards, then everything due.
   if (method === "GET" && parts.length === 3 && parts[1] === "cards" && parts[2] === "queue") {
     await ensureDailyRebalance(env);
+    await healAgainCards(env);
     const rel = await releaseNewCards(env);
     const { results } = await env.DB.prepare(
       `SELECT id, category_id, front, back, image, repetitions, lapses
