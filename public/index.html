@@ -2507,6 +2507,7 @@
   let fcSummary = null;
   let fcSession = null;
   let fcPending = null;
+  let fcNote = '';
 
   async function fcGet(path) {
     try {
@@ -2546,6 +2547,7 @@
         <button type="button" id="fcStartBtn" ${todo ? '' : 'disabled'}>Study</button>
         <a class="ghost-link" href="/api/cards/export" download="steady-cards.txt" title="Tab-separated file Anki can import">Export for Anki</a>
       </div></div>`);
+    if (fcNote) parts.push(`<div class="fc-note warn">${escapeHtml(fcNote)}</div>`);
     if (s.paused) parts.push(`<div class="fc-note warn">New cards are paused until you clear the reviews already due. Piling new cards on a backlog is how decks stop being used.</div>`);
     else if (s.staged) parts.push(`<div class="fc-note">${s.staged} more card${s.staged === 1 ? ' is' : 's are'} queued. They are introduced about ${s.new_per_day} a day, faster when an exam is close.</div>`);
     const max = Math.max(1, ...s.load.map((d) => d.count));
@@ -2577,7 +2579,14 @@
 
   async function fcStart() {
     const q = await fcGet('/cards/queue');
-    if (!q || !q.cards.length) { await fcRefresh(); return; }
+    if (!q || !q.cards.length) {
+      fcNote = q
+        ? 'Nothing is due right now. New cards for today have all been introduced; more come tomorrow.'
+        : 'Couldn’t reach Steady. Try again in a moment.';
+      await fcRefresh();
+      return;
+    }
+    fcNote = '';
     fcSession = { queue: q.cards, total: q.cards.length, done: 0, again: 0, shown: false, busy: false, error: '' };
     fcOpen('fcStudy');
     renderFcStudy();
@@ -2623,7 +2632,7 @@
     renderFcStudy();
   }
 
-  function fcEndStudy() { fcSession = null; fcClose('fcStudy'); refresh(); }
+  function fcEndStudy() { fcSession = null; fcNote = ''; fcClose('fcStudy'); refresh(); }
 
   // --- Adding cards, with the recheck gate ---
   function fcParseLines(text) {

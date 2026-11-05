@@ -1207,7 +1207,7 @@ async function handleApi(request, env, url, ctx) {
     const introducedToday = all.filter((c) => c.introduced_at === today).length;
     const plan = planRelease({
       staged: staged.map((c) => ({ id: c.id, exam: earliestExam(categoryMap, c.category_id, today) })),
-      introducedToday: 0, dueNow, today,
+      introducedToday, dueNow, today,
     });
     const byCat = {};
     for (const c of all) {
